@@ -6,11 +6,14 @@ import (
 	"strings"
 )
 
+// V2V4 implements AWS Signature Version 2 and AWS Signature Version 4
+// verification.
 type V2V4 struct {
 	v2 *V2
 	v4 *V4
 }
 
+// NewV2V4 creates a new V2V4 with the given provider and v4Config.
 func NewV2V4(provider CredentialsProvider, v4Config V4Config) *V2V4 {
 	return &V2V4{
 		v2: NewV2(provider),
@@ -18,6 +21,9 @@ func NewV2V4(provider CredentialsProvider, v4Config V4Config) *V2V4 {
 	}
 }
 
+// Verify automatically detects and verifies either AWS Signature
+// Version 2 or AWS Signature Version 4 for the given request and
+// returns a verified request.
 func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedRequest, error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {

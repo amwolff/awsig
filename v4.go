@@ -56,7 +56,7 @@ const (
 	lf = '\n'
 )
 
-type V4Reader struct {
+type v4Reader struct {
 	r  io.Reader
 	ir *integrityReader
 
@@ -80,7 +80,7 @@ type V4Reader struct {
 	chunkExpectedSignature signatureV4
 }
 
-func (r *V4Reader) consumeLF(buf []byte) error {
+func (r *v4Reader) consumeLF(buf []byte) error {
 	buf, err := reuseBuffer(buf, 1)
 	if err != nil {
 		return err
@@ -97,7 +97,7 @@ func (r *V4Reader) consumeLF(buf []byte) error {
 	return nil
 }
 
-func (r *V4Reader) consumeCRLF(buf []byte) error {
+func (r *v4Reader) consumeCRLF(buf []byte) error {
 	buf, err := reuseBuffer(buf, 2)
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func (r *V4Reader) consumeCRLF(buf []byte) error {
 	return nil
 }
 
-func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
+func (r *v4Reader) readChunkLength(buf []byte) (int, error) {
 	var (
 		rawLength      []byte
 		separatorFound bool
@@ -167,7 +167,7 @@ Loop:
 	return int(length), nil
 }
 
-func (r *V4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, error) {
+func (r *v4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, error) {
 	buf, err := reuseBuffer(buf, len(prefix)+signatureV4EncodedLength)
 	if err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (r *V4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, e
 	return signature, r.consumeCRLF(buf)
 }
 
-func (r *V4Reader) readChunkMeta(buf []byte) (int, signatureV4, error) {
+func (r *v4Reader) readChunkMeta(buf []byte) (int, signatureV4, error) {
 	length, err := r.readChunkLength(buf)
 	if err != nil {
 		return 0, nil, err
@@ -205,7 +205,7 @@ func (r *V4Reader) readChunkMeta(buf []byte) (int, signatureV4, error) {
 	return length, signature, nil
 }
 
-func (r *V4Reader) currentChunkSignatureData() signatureV4Data {
+func (r *v4Reader) currentChunkSignatureData() signatureV4Data {
 	return signatureV4Data{
 		algorithm:       r.signingAlgo,
 		algorithmSuffix: algorithmSuffixPayload,
@@ -216,7 +216,7 @@ func (r *V4Reader) currentChunkSignatureData() signatureV4Data {
 	}
 }
 
-func (r *V4Reader) readChunkTrailer(buf []byte) error {
+func (r *v4Reader) readChunkTrailer(buf []byte) error {
 	name := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String() + ":"
 
 	length := len(name)
@@ -288,7 +288,7 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 	return nil
 }
 
-func (r *V4Reader) close(buf []byte) error {
+func (r *v4Reader) close(buf []byte) error {
 	if r.decodedContentLength != 0 {
 		return ErrIncompleteBody
 	}
@@ -321,7 +321,7 @@ func (r *V4Reader) close(buf []byte) error {
 	return io.EOF
 }
 
-func (r *V4Reader) Read(p []byte) (n int, err error) {
+func (r *v4Reader) Read(p []byte) (n int, err error) {
 	if !r.multipleChunks { // fast path for single chunk
 		if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
 			if err := r.ir.verify(r.integrity); err != nil {
@@ -395,16 +395,18 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (r *V4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
+func (r *v4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
+// V4VerifiedRequest implements VerifiedRequest for AWS Signature
+// Version 4.
 type V4VerifiedRequest struct {
 	form   PostForm
 	data   v4ReaderOptions
 	source io.Reader
 
-	wrapped *V4Reader
+	wrapped *v4Reader
 
 	algorithms      []ChecksumAlgorithm
 	trailingSumAlgo *ChecksumAlgorithm
@@ -438,6 +440,7 @@ func newV4VerifiedRequest(source io.Reader, data v4ReaderOptions) (*V4VerifiedRe
 	return newV4VerifiedRequestWithForm(source, data, nil)
 }
 
+// PostForm implements VerifiedRequest.
 func (vr *V4VerifiedRequest) PostForm() PostForm {
 	return vr.form
 }
@@ -484,6 +487,7 @@ func (vr *V4VerifiedRequest) requestChecksums(reqs []ChecksumRequest) error {
 	return nil
 }
 
+// Reader implements VerifiedRequest.
 func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 	if vr.wrapped != nil {
 		if len(reqs) > 0 {
@@ -511,7 +515,7 @@ func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 		ir = newIntegrityReader(vr.source, vr.algorithms)
 	}
 
-	vr.wrapped = &V4Reader{
+	vr.wrapped = &v4Reader{
 		r:                      vr.source,
 		ir:                     ir,
 		unsigned:               vr.data.parsedOptions.unsigned,
@@ -534,6 +538,7 @@ func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 	return vr.wrapped, nil
 }
 
+// V4 implements AWS Signature Version 4 verification.
 type V4 struct {
 	provider CredentialsProvider
 	config   V4Config
@@ -541,12 +546,14 @@ type V4 struct {
 	now func() time.Time
 }
 
+// V4Config contains configuration for V4.
 type V4Config struct {
 	Region                 string
 	Service                string
 	SkipRegionVerification bool
 }
 
+// NewV4 creates a new V4 with the given provider and config.
 func NewV4(provider CredentialsProvider, config V4Config) *V4 {
 	return &V4{
 		provider: provider,
@@ -1228,6 +1235,8 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOption
 	}, nil
 }
 
+// Verify verifies the AWS Signature Version 4 for the given request and
+// returns a verified request.
 func (v4 *V4) Verify(r *http.Request) (*V4VerifiedRequest, error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {

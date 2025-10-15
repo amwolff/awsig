@@ -15,27 +15,46 @@ import (
 )
 
 var (
-	ErrAuthorizationHeaderMalformed      = errors.New("the authorization header that you provided is not valid")
+	// ErrAccessDenied indicates the AccessDenied error code.
+	ErrAccessDenied = errors.New("access denied")
+	// ErrAuthorizationHeaderMalformed indicates the AuthorizationHeaderMalformed error code.
+	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
+	// ErrAuthorizationQueryParametersError indicates the AuthorizationQueryParametersError error code.
 	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
-	ErrBadDigest                         = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
-	ErrEntityTooLarge                    = errors.New("your proposed upload exceeds the maximum allowed object size")
-	ErrEntityTooSmall                    = errors.New("your proposed upload is smaller than the minimum allowed object size")
-	ErrIncompleteBody                    = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
-	ErrInvalidArgument                   = errors.New("invalid argument")
-	ErrInvalidDigest                     = errors.New("the Content-MD5 or checksum value that you specified is not valid")
-	ErrInvalidRequest                    = errors.New("invalid request")
-	ErrInvalidSignature                  = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrMissingAuthenticationToken        = errors.New("the request was not signed")
-	ErrMissingContentLength              = errors.New("you must provide the Content-Length HTTP header")
-	ErrMissingSecurityHeader             = errors.New("your request is missing a required header")
-	ErrRequestTimeTooSkewed              = errors.New("the difference between the request time and the server's time is too large")
-	ErrSignatureDoesNotMatch             = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrUnsupportedSignature              = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
+	// ErrBadDigest indicates the BadDigest error code.
+	ErrBadDigest = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
+	// ErrEntityTooLarge indicates the EntityTooLarge error code.
+	ErrEntityTooLarge = errors.New("your proposed upload exceeds the maximum allowed object size")
+	// ErrEntityTooSmall indicates the EntityTooSmall error code.
+	ErrEntityTooSmall = errors.New("your proposed upload is smaller than the minimum allowed object size")
+	// ErrIncompleteBody indicates the IncompleteBody error code.
+	ErrIncompleteBody = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
+	// ErrInvalidArgument indicates the InvalidArgument error code.
+	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrInvalidDigest indicates the InvalidDigest error code.
+	ErrInvalidDigest = errors.New("the Content-MD5 or checksum value that you specified is not valid")
+	// ErrInvalidRequest indicates the InvalidRequest error code.
+	ErrInvalidRequest = errors.New("invalid request")
+	// ErrInvalidSignature indicates the InvalidSignature error code.
+	ErrInvalidSignature = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrMissingAuthenticationToken indicates the MissingAuthenticationToken error code.
+	ErrMissingAuthenticationToken = errors.New("the request was not signed")
+	// ErrMissingContentLength indicates the MissingContentLength error code.
+	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
+	// ErrMissingSecurityHeader indicates the MissingSecurityHeader error code.
+	ErrMissingSecurityHeader = errors.New("your request is missing a required header")
+	// ErrRequestTimeTooSkewed indicates the RequestTimeTooSkewed error code.
+	ErrRequestTimeTooSkewed = errors.New("the difference between the request time and the server's time is too large")
+	// ErrSignatureDoesNotMatch indicates the SignatureDoesNotMatch error code.
+	ErrSignatureDoesNotMatch = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrUnsupportedSignature indicates the UnsupportedSignature error code.
+	ErrUnsupportedSignature = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
 
-	ErrAccessDenied       = errors.New("access denied")
+	// ErrInvalidAccessKeyID indicates the InvalidAccessKeyID error code.
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 
-	ErrNotImplemented = errors.New("not implemented")
+	// ErrNotImplemented indicates the NotImplemented error code.
+	ErrNotImplemented = errors.New("a header that you provided implies functionality that is not implemented")
 )
 
 const (
@@ -65,19 +84,43 @@ var httpTimeFormats = []string{
 
 var errMessageTooLarge = errors.New("message too large")
 
+// CredentialsProvider is the interface that all users of this package
+// must implement. Provide is called by signature verifiers. If the
+// given accessKeyID is unknown to the implementation, it should return
+// an empty Secret Access Key and the ErrInvalidAccessKeyID error.
 type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
 
-type Reader interface {
-	io.Reader
-	Checksums() (map[ChecksumAlgorithm][]byte, error)
-}
+type (
+	// Reader is an io.Reader to be used to read the body of a verified
+	// request with optional checksum computation and auto-verification.
+	Reader interface {
+		io.Reader
+		// Checksums returns computed checksums of the read data.
+		// Checksums are only available after reaching EOF.
+		// If called before reaching EOF, it returns an error.
+		//
+		// If not previously requested:
+		// 	- MD5 is always computed
+		// 	- SHA-256 is computed if the request has a hashed payload
+		Checksums() (map[ChecksumAlgorithm][]byte, error)
+	}
 
-type VerifiedRequest interface {
-	PostForm() PostForm
-	Reader(...ChecksumRequest) (Reader, error)
-}
+	// VerifiedRequest represents a successfully verified AWS Signature
+	// Version 4 or AWS Signature Version 2 request.
+	VerifiedRequest interface {
+		// PostForm returns the parsed multipart form data if the
+		// request is a POST with "multipart/form-data" Content-Type.
+		PostForm() PostForm
+		// Reader returns a Reader to read the body of the verified
+		// request. Reader can be called multiple times, but only the
+		// first call can request checksums. Checksum requests must have
+		// distinct algorithms. If the request includes a trailing
+		// checksum header, at least one checksum must be requested.
+		Reader(...ChecksumRequest) (Reader, error)
+	}
+)
 
 type nestedError struct {
 	outer error
@@ -172,18 +215,22 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 	}
 }
 
+// PostFormElement represents a single element in a multipart form.
 type PostFormElement struct {
 	Value   string
 	Headers textproto.MIMEHeader
 }
 
+// PostForm represents a parsed multipart form data.
 type PostForm map[string][]PostFormElement
 
+// FileName returns the filename from the "file" field of the form.
 func (f PostForm) FileName() string {
 	v, _ := f.Get("file")
 	return v
 }
 
+// Add adds a new value to the form field with the given key.
 func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
 	k := textproto.CanonicalMIMEHeaderKey(key)
 	f[k] = append(f[k], PostFormElement{
@@ -192,6 +239,8 @@ func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
 	})
 }
 
+// Set sets the form field to the given value, replacing any existing
+// values.
 func (f PostForm) Set(key string, value string, headers textproto.MIMEHeader) {
 	k := textproto.CanonicalMIMEHeaderKey(key)
 	f[k] = []PostFormElement{{
@@ -200,6 +249,7 @@ func (f PostForm) Set(key string, value string, headers textproto.MIMEHeader) {
 	}}
 }
 
+// Get returns the first value and headers for the given key.
 func (f PostForm) Get(key string) (string, textproto.MIMEHeader) {
 	if f == nil {
 		return "", nil
@@ -211,6 +261,7 @@ func (f PostForm) Get(key string) (string, textproto.MIMEHeader) {
 	return v[0].Value, v[0].Headers
 }
 
+// Values returns all values and headers for the given key.
 func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
 	if f == nil {
 		return nil, nil
@@ -225,6 +276,7 @@ func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
 	return vals, hdrs
 }
 
+// Has reports whether the form contains the given key.
 func (f PostForm) Has(key string) bool {
 	if f == nil {
 		return false

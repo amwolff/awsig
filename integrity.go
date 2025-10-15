@@ -17,14 +17,22 @@ import (
 	"strconv"
 )
 
+// ChecksumAlgorithm represents different checksum algorithms supported
+// by this package.
 type ChecksumAlgorithm int
 
 const (
+	// AlgorithmCRC32 represents the CRC-32 checksum algorithm.
 	AlgorithmCRC32 ChecksumAlgorithm = iota
+	// AlgorithmCRC32C represents the CRC-32C checksum algorithm.
 	AlgorithmCRC32C
+	// AlgorithmCRC64NVME represents the CRC-64/NVME checksum algorithm.
 	AlgorithmCRC64NVME
+	// AlgorithmMD5 represents the MD5 checksum algorithm.
 	AlgorithmMD5
+	// AlgorithmSHA1 represents the SHA-1 checksum algorithm.
 	AlgorithmSHA1
+	// AlgorithmSHA256 represents the SHA-256 checksum algorithm.
 	AlgorithmSHA256
 	algorithmHashedPayload
 )
@@ -69,6 +77,8 @@ func (a ChecksumAlgorithm) String() string {
 	}
 }
 
+// ChecksumRequest represents a request to compute or verify a specific
+// checksum.
 type ChecksumRequest struct {
 	algorithm ChecksumAlgorithm
 	value     []byte
@@ -79,6 +89,8 @@ func (r ChecksumRequest) valid() bool {
 	return r.value != nil || r.trailing
 }
 
+// NewChecksumRequest creates a new ChecksumRequest with the specified
+// algorithm and encoded value.
 func NewChecksumRequest(algorithm ChecksumAlgorithm, encodedValue string) (ChecksumRequest, error) {
 	if !algorithm.valid() {
 		return ChecksumRequest{}, errors.New("invalid algorithm")
@@ -93,6 +105,8 @@ func NewChecksumRequest(algorithm ChecksumAlgorithm, encodedValue string) (Check
 	}, nil
 }
 
+// NewTrailingChecksumRequest creates a new ChecksumRequest for trailing
+// checksum verification.
 func NewTrailingChecksumRequest(algorithm ChecksumAlgorithm) (ChecksumRequest, error) {
 	if !algorithm.valid() {
 		return ChecksumRequest{}, errors.New("invalid algorithm")
@@ -173,9 +187,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			r.sums[algo] = sum
 		}
 
-		if expected, ok := integrity[algo]; !ok {
-			// not requested, skip verification
-		} else if !bytes.Equal(expected, sum) {
+		if expected, ok := integrity[algo]; ok && !bytes.Equal(expected, sum) {
 			errs = errors.Join(errs, fmt.Errorf("%s do not match: expected %x, got %x", algo, expected, sum))
 		}
 	}

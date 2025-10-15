@@ -19,17 +19,17 @@ import (
 )
 
 const (
-	queryAWSAccessKeyId = "AWSAccessKeyId"
+	queryAWSAccessKeyId = "AWSAccessKeyId" //nolint:revive
 	queryExpires        = "Expires"
 	querySignature      = "Signature"
 )
 
-type V2Reader struct {
+type v2Reader struct {
 	ir        *integrityReader
 	integrity expectedIntegrity
 }
 
-func (r *V2Reader) Read(p []byte) (n int, err error) {
+func (r *v2Reader) Read(p []byte) (n int, err error) {
 	if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
 		if err := r.ir.verify(r.integrity); err != nil {
 			return n, nestError(ErrBadDigest, "verify failed: %w", err)
@@ -38,15 +38,17 @@ func (r *V2Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (r *V2Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
+func (r *v2Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
+// V2VerifiedRequest implements VerifiedRequest for AWS Signature
+// Version 2.
 type V2VerifiedRequest struct {
 	form   PostForm
 	source io.Reader
 
-	wrapped *V2Reader
+	wrapped *v2Reader
 
 	algorithms []ChecksumAlgorithm
 	integrity  expectedIntegrity
@@ -64,6 +66,7 @@ func newV2VerifiedRequest(source io.Reader) (*V2VerifiedRequest, error) {
 	return newV2VerifiedRequestWithForm(source, nil)
 }
 
+// PostForm implements VerifiedRequest.
 func (vr *V2VerifiedRequest) PostForm() PostForm {
 	return vr.form
 }
@@ -99,6 +102,7 @@ func (vr *V2VerifiedRequest) requestChecksums(reqs []ChecksumRequest) error {
 	return nil
 }
 
+// Reader implements VerifiedRequest.
 func (vr *V2VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 	if vr.wrapped != nil {
 		if len(reqs) > 0 {
@@ -111,7 +115,7 @@ func (vr *V2VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 		return nil, err
 	}
 
-	vr.wrapped = &V2Reader{
+	vr.wrapped = &v2Reader{
 		ir:        newIntegrityReader(vr.source, vr.algorithms),
 		integrity: vr.integrity,
 	}
@@ -119,11 +123,13 @@ func (vr *V2VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 	return vr.wrapped, nil
 }
 
+// V2 implements AWS Signature Version 2 verification.
 type V2 struct {
 	provider CredentialsProvider
 	now      func() time.Time
 }
 
+// NewV2 creates a new V2 with the given provider.
 func NewV2(provider CredentialsProvider) *V2 {
 	return &V2{
 		provider: provider,
@@ -383,6 +389,8 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 	return nil
 }
 
+// Verify verifies the AWS Signature Version 2 for the given request and
+// returns a verified request.
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRequest, error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {

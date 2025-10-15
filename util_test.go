@@ -236,14 +236,14 @@ type simpleCredentialsProvider struct {
 	secretAccessKey string
 }
 
-func (p simpleCredentialsProvider) Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error) {
+func (p simpleCredentialsProvider) Provide(_ context.Context, accessKeyID string) (secretAccessKey string, _ error) {
 	if accessKeyID != p.accessKeyID {
 		return "", ErrInvalidAccessKeyID
 	}
 	return p.secretAccessKey, nil
 }
 
-func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time {
+func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time { //nolint:revive
 	return func() time.Time {
 		return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
 	}
