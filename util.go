@@ -102,8 +102,9 @@ type (
 		// If called before reaching EOF, it returns an error.
 		//
 		// If not previously requested:
-		// 	- MD5 is always computed
-		// 	- SHA-256 is computed if the request has a hashed payload
+		//
+		// - MD5 is always computed
+		// - SHA-256 is computed if the request has a hashed payload
 		Checksums() (map[ChecksumAlgorithm][]byte, error)
 	}
 
@@ -217,8 +218,8 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 
 // PostFormElement represents a single element in a multipart form.
 type PostFormElement struct {
-	Value   string
 	Headers textproto.MIMEHeader
+	Value   string
 }
 
 // PostForm represents a parsed multipart form data.
@@ -234,8 +235,8 @@ func (f PostForm) FileName() string {
 func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
 	k := textproto.CanonicalMIMEHeaderKey(key)
 	f[k] = append(f[k], PostFormElement{
-		Value:   value,
 		Headers: headers,
+		Value:   value,
 	})
 }
 
@@ -244,8 +245,8 @@ func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
 func (f PostForm) Set(key string, value string, headers textproto.MIMEHeader) {
 	k := textproto.CanonicalMIMEHeaderKey(key)
 	f[k] = []PostFormElement{{
-		Value:   value,
 		Headers: headers,
+		Value:   value,
 	}}
 }
 

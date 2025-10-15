@@ -80,9 +80,9 @@ func (a ChecksumAlgorithm) String() string {
 // ChecksumRequest represents a request to compute or verify a specific
 // checksum.
 type ChecksumRequest struct {
-	algorithm ChecksumAlgorithm
 	value     []byte
 	trailing  bool
+	algorithm ChecksumAlgorithm
 }
 
 func (r ChecksumRequest) valid() bool {
@@ -100,8 +100,8 @@ func NewChecksumRequest(algorithm ChecksumAlgorithm, encodedValue string) (Check
 		return ChecksumRequest{}, err
 	}
 	return ChecksumRequest{
-		algorithm: algorithm,
 		value:     v,
+		algorithm: algorithm,
 	}, nil
 }
 
@@ -116,8 +116,8 @@ func NewTrailingChecksumRequest(algorithm ChecksumAlgorithm) (ChecksumRequest, e
 		return ChecksumRequest{}, errors.New("unsupported algorithm")
 	default:
 		return ChecksumRequest{
-			algorithm: algorithm,
 			trailing:  true,
+			algorithm: algorithm,
 		}, nil
 	}
 }
