@@ -41,8 +41,10 @@ func TestV4(t *testing.T) {
 }
 
 func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, func() time.Time) verifier[T]) {
+	const accessKeyID = "AKIAIOSFODNN7EXAMPLE"
+
 	provider := simpleCredentialsProvider{
-		accessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+		accessKeyID:     accessKeyID,
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
@@ -59,6 +61,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -80,6 +83,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -96,6 +100,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -113,6 +118,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -149,6 +155,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -187,6 +194,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32C)
 			assert.NoError(t, err)
@@ -236,6 +244,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
 			assert.NoError(t, err)
@@ -260,6 +269,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
+		assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -302,6 +312,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
+		assert.Equal(t, accessKeyID, vr.AccessKeyID())
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)

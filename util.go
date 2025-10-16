@@ -111,6 +111,7 @@ type (
 	// VerifiedRequest represents a successfully verified AWS Signature
 	// Version 4 or AWS Signature Version 2 request.
 	VerifiedRequest interface {
+		AccessKeyID() string
 		// PostForm returns the parsed multipart form data if the
 		// request is a POST with "multipart/form-data" Content-Type.
 		PostForm() PostForm

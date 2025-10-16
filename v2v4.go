@@ -45,10 +45,11 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedR
 			}
 			return newV4VerifiedRequestWithForm(file, data, form)
 		} else if form.Has(queryAWSAccessKeyId) {
-			if err = v2v4.v2.verifyPost(r.Context(), form); err != nil {
+			data, err := v2v4.v2.verifyPost(r.Context(), form)
+			if err != nil {
 				return nil, err
 			}
-			return newV2VerifiedRequestWithForm(file, form)
+			return newV2VerifiedRequestWithForm(file, data, form)
 		}
 	} else if h := r.Header.Get(headerAuthorization); h != "" {
 		if strings.HasPrefix(h, v4SigningAlgorithmPrefix) {
@@ -58,10 +59,11 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedR
 			}
 			return newV4VerifiedRequest(r.Body, data)
 		}
-		if err = v2v4.v2.verify(r, virtualHostedBucket); err != nil {
+		data, err := v2v4.v2.verify(r, virtualHostedBucket)
+		if err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequest(r.Body)
+		return newV2VerifiedRequest(r.Body, data)
 	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
 		data, err := v2v4.v4.verifyPresigned(r, query)
 		if err != nil {
@@ -69,10 +71,11 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedR
 		}
 		return newV4VerifiedRequest(r.Body, data)
 	} else if query.Has(queryAWSAccessKeyId) {
-		if err = v2v4.v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
+		data, err := v2v4.v2.verifyPresigned(r, query, virtualHostedBucket)
+		if err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequest(r.Body)
+		return newV2VerifiedRequest(r.Body, data)
 	}
 
 	return nil, ErrMissingAuthenticationToken
