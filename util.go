@@ -92,6 +92,97 @@ type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
 
+// PostFormElement represents a single element in a multipart form.
+type PostFormElement struct {
+	Headers textproto.MIMEHeader
+	Value   string
+}
+
+func (e PostFormElement) clone() PostFormElement {
+	return PostFormElement{
+		Headers: textproto.MIMEHeader(http.Header(e.Headers).Clone()),
+		Value:   e.Value,
+	}
+}
+
+// PostForm maps a string key to a list of values.
+// It represents a parsed multipart form data.
+// Unlike in [url.Values], the keys in [PostForm] are case-insensitive.
+type PostForm map[string][]PostFormElement
+
+// Get gets the first value associated with the given key.
+// If there are no values associated with the key, Get returns the empty [PostFormElement].
+func (f PostForm) Get(key string) PostFormElement {
+	v := f[textproto.CanonicalMIMEHeaderKey(key)]
+	if len(v) == 0 {
+		return PostFormElement{}
+	}
+	return v[0]
+}
+
+// Set sets the key to value.
+// It replaces any existing values.
+func (f PostForm) Set(key string, value PostFormElement) {
+	f[textproto.CanonicalMIMEHeaderKey(key)] = []PostFormElement{value}
+}
+
+// Add adds the value to key.
+// It appends to any existing values associated with key.
+func (f PostForm) Add(key string, value PostFormElement) {
+	key = textproto.CanonicalMIMEHeaderKey(key)
+	f[key] = append(f[key], value)
+}
+
+// Del deletes the values associated with key.
+func (f PostForm) Del(key string) {
+	delete(f, textproto.CanonicalMIMEHeaderKey(key))
+}
+
+// Has checks whether a given key is set.
+func (f PostForm) Has(key string) bool {
+	_, ok := f[textproto.CanonicalMIMEHeaderKey(key)]
+	return ok
+}
+
+// Values returns all values associated with the given key.
+// The returned slice is not a copy.
+func (f PostForm) Values(key string) []PostFormElement {
+	return f[textproto.CanonicalMIMEHeaderKey(key)]
+}
+
+// Clone returns a copy of f or nil if f is nil.
+func (f PostForm) Clone() PostForm {
+	if f == nil {
+		return nil
+	}
+
+	nv := 0
+	for _, v := range f {
+		nv += len(v)
+	}
+	ev := make([]PostFormElement, nv)
+	f2 := make(PostForm, len(f))
+	for k, v := range f {
+		if v == nil {
+			f2[k] = nil
+			continue
+		}
+		var n int
+		for _, vv := range v {
+			ev[n] = vv.clone()
+			n++
+		}
+		f2[k] = ev[:n:n]
+		ev = ev[n:]
+	}
+	return f2
+}
+
+// FileName returns the filename from the "file" field of the form.
+func (f PostForm) FileName() string {
+	return f.Get("file").Value
+}
+
 type (
 	// Reader is an io.Reader to be used to read the body of a verified
 	// request with optional checksum computation and auto-verification.
@@ -217,76 +308,6 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 	}
 }
 
-// PostFormElement represents a single element in a multipart form.
-type PostFormElement struct {
-	Headers textproto.MIMEHeader
-	Value   string
-}
-
-// PostForm represents a parsed multipart form data.
-type PostForm map[string][]PostFormElement
-
-// FileName returns the filename from the "file" field of the form.
-func (f PostForm) FileName() string {
-	v, _ := f.Get("file")
-	return v
-}
-
-// Add adds a new value to the form field with the given key.
-func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
-	k := textproto.CanonicalMIMEHeaderKey(key)
-	f[k] = append(f[k], PostFormElement{
-		Headers: headers,
-		Value:   value,
-	})
-}
-
-// Set sets the form field to the given value, replacing any existing
-// values.
-func (f PostForm) Set(key string, value string, headers textproto.MIMEHeader) {
-	k := textproto.CanonicalMIMEHeaderKey(key)
-	f[k] = []PostFormElement{{
-		Headers: headers,
-		Value:   value,
-	}}
-}
-
-// Get returns the first value and headers for the given key.
-func (f PostForm) Get(key string) (string, textproto.MIMEHeader) {
-	if f == nil {
-		return "", nil
-	}
-	v := f[textproto.CanonicalMIMEHeaderKey(key)]
-	if len(v) == 0 {
-		return "", nil
-	}
-	return v[0].Value, v[0].Headers
-}
-
-// Values returns all values and headers for the given key.
-func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
-	if f == nil {
-		return nil, nil
-	}
-	v := f[textproto.CanonicalMIMEHeaderKey(key)]
-	vals := make([]string, 0, len(v))
-	hdrs := make([]textproto.MIMEHeader, 0, len(v))
-	for _, e := range v {
-		vals = append(vals, e.Value)
-		hdrs = append(hdrs, e.Headers)
-	}
-	return vals, hdrs
-}
-
-// Has reports whether the form contains the given key.
-func (f PostForm) Has(key string) bool {
-	if f == nil {
-		return false
-	}
-	_, ok := f[textproto.CanonicalMIMEHeaderKey(key)]
-	return ok
-}
-
 var errLimitReached = errors.New("limitedReader: limit reached")
 
 func limitReader(r io.Reader, n int64) *limitedReader {
@@ -349,7 +370,10 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 
 		if name == "file" {
 			lr.toggle() // stop limiting the reader as we reached the file part
-			form.Set(name, part.FileName(), part.Header)
+			form.Set(name, PostFormElement{
+				Headers: part.Header,
+				Value:   part.FileName(),
+			})
 			return part, form, nil
 		}
 
@@ -363,7 +387,10 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 			}
 			return nil, PostForm{}, err
 		}
-		form.Add(name, string(b), part.Header)
+		form.Add(name, PostFormElement{
+			Headers: part.Header,
+			Value:   string(b),
+		})
 
 		if err = part.Close(); err != nil {
 			return nil, PostForm{}, err

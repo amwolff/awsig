@@ -302,8 +302,7 @@ func (v2 *V2) calculatePostSignature(data, key string) signatureV2 {
 }
 
 func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData, error) {
-	rawSignature, _ := form.Get(querySignature)
-	signature, err := newSignatureV2FromEncoded(rawSignature)
+	signature, err := newSignatureV2FromEncoded(form.Get(querySignature).Value)
 	if err != nil {
 		return v2VerifiedData{}, nestError(
 			ErrInvalidSignature,
@@ -311,7 +310,7 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData, er
 		)
 	}
 
-	policy, _ := form.Get(formNamePolicy)
+	policy := form.Get(formNamePolicy).Value
 	if policy == "" {
 		return v2VerifiedData{}, nestError(
 			ErrInvalidRequest,
@@ -319,7 +318,7 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData, er
 		)
 	}
 
-	accessKeyID, _ := form.Get(queryAWSAccessKeyId)
+	accessKeyID := form.Get(queryAWSAccessKeyId).Value
 	secretAccessKey, err := v2.provider.Provide(ctx, accessKeyID)
 	if err != nil {
 		return v2VerifiedData{}, err

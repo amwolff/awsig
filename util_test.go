@@ -10,12 +10,94 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/zeebo/assert"
 )
+
+func TestPostForm(t *testing.T) {
+	t.Run("unitialized", func(t *testing.T) {
+		var f PostForm
+
+		assert.Equal(t, PostFormElement{}, f.Get("key"))
+		assert.False(t, f.Has("key"))
+
+		assert.Nil(t, f.Values("key"))
+		assert.Nil(t, f.Clone())
+
+		assert.Equal(t, "", f.FileName())
+	})
+	t.Run("all ops", func(t *testing.T) {
+		f := make(PostForm)
+
+		const (
+			key1 = "key1"
+			key2 = "key2"
+			keyf = "file"
+		)
+
+		v1 := PostFormElement{
+			Headers: textproto.MIMEHeader{"v1": {"vv2"}},
+			Value:   "value3",
+		}
+		v2 := PostFormElement{
+			Headers: textproto.MIMEHeader{
+				"v4": {"vv5"},
+				"v6": nil,
+				"v7": {"vv8", "vv9"},
+			},
+			Value: "value10",
+		}
+		v3 := PostFormElement{
+			Headers: nil,
+			Value:   "value11",
+		}
+		vf := PostFormElement{
+			Headers: textproto.MIMEHeader{"v12": {"vv13"}},
+			Value:   "filename",
+		}
+
+		f.Set(key1, v1)
+		f.Add(key2, v2)
+		f["nil"] = nil
+		f.Add(key1, v3)
+		f.Set(keyf, vf)
+
+		assert.That(t, f.Has(key1))
+		assert.That(t, f.Has(key2))
+
+		assert.False(t, f.Has("?"))
+
+		assert.Equal(t, v1, f.Get(key1))
+		assert.Equal(t, v2, f.Get(key2))
+
+		assert.Equal(t, PostFormElement{}, f.Get("?"))
+
+		assert.Equal(t, []PostFormElement{v1, v3}, f.Values(key1))
+		assert.Equal(t, []PostFormElement{v2}, f.Values(key2))
+
+		assert.Nil(t, f.Values("?"))
+
+		assert.Equal(t, "filename", f.FileName())
+
+		clone := f.Clone()
+
+		assert.Equal(t, f, clone)
+
+		clone.Del(keyf)
+		assert.NotEqual(t, f, clone)
+		clone.Set(key1, PostFormElement{Value: "value", Headers: textproto.MIMEHeader{"v": {"vv"}}})
+		assert.NotEqual(t, f, clone)
+		clone.Get(key2).Headers.Add("v", "vv")
+		assert.NotEqual(t, f, clone)
+		clone.Add(key2, PostFormElement{Value: "value", Headers: textproto.MIMEHeader{"v": {"vv"}}})
+		assert.NotEqual(t, f, clone)
+	})
+}
 
 func TestNestedError(t *testing.T) {
 	outer := errors.New("outer")
@@ -200,14 +282,15 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 
 		for name, values := range expectedForm {
 			{
-				actual, headers := actualForm.Get(name)
-				assert.Equal(t, values[0], actual)
-				assert.Equal(t, 1, len(headers))
+				actual := actualForm.Get(name)
+				assert.Equal(t, values[0], actual.Value)
+				assert.Equal(t, 1, len(actual.Headers))
 			}
 			{
-				actual, headers := actualForm.Values(name)
-				assert.Equal(t, values, actual)
-				assert.Equal(t, 1, len(headers))
+				for _, actual := range actualForm.Values(name) {
+					assert.That(t, slices.Contains(values, actual.Value))
+					assert.Equal(t, 1, len(actual.Headers))
+				}
 			}
 		}
 	})

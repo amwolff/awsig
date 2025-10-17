@@ -1032,7 +1032,7 @@ func (v4 *V4) calculatePostSignature(data signatureV4Data, secretAccessKey strin
 }
 
 func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData, error) {
-	rawDate, _ := form.Get(queryXAmzDate)
+	rawDate := form.Get(queryXAmzDate).Value
 
 	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
 	if err != nil {
@@ -1049,25 +1049,22 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData, er
 		)
 	}
 
-	rawAlgorithm, _ := form.Get(queryXAmzAlgorithm)
-	signingAlgo, err := v4.parseSigningAlgo(rawAlgorithm)
+	signingAlgo, err := v4.parseSigningAlgo(form.Get(queryXAmzAlgorithm).Value)
 	if err != nil {
 		return v4VerifiedData{}, err
 	}
 
-	rawCredential, _ := form.Get(queryXAmzCredential)
-	credential, err := v4.parseCredential(rawCredential, parsedDateTime, true)
+	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true)
 	if err != nil {
 		return v4VerifiedData{}, err
 	}
 
-	rawSignature, _ := form.Get(queryXAmzSignature)
-	signature, err := v4.parseSignature(rawSignature, true)
+	signature, err := v4.parseSignature(form.Get(queryXAmzSignature).Value, true)
 	if err != nil {
 		return v4VerifiedData{}, err
 	}
 
-	policy, _ := form.Get(formNamePolicy)
+	policy := form.Get(formNamePolicy).Value
 	if policy == "" {
 		return v4VerifiedData{}, nestError(
 			ErrInvalidRequest,
