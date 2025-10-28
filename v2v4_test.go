@@ -6,7 +6,7 @@ import (
 )
 
 func TestV2V4(t *testing.T) {
-	newV2V4 := func(provider CredentialsProvider, now func() time.Time) verifier[VerifiedRequest] {
+	newV2V4 := func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[VerifiedRequest[exampleAuthData]] {
 		v2v4 := NewV2V4(provider, V4Config{
 			Region:  testDefaultRegion,
 			Service: testDefaultService,

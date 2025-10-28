@@ -17,7 +17,7 @@ import (
 )
 
 func TestV2(t *testing.T) {
-	newV2 := func(provider CredentialsProvider, now func() time.Time) verifier[*V2VerifiedRequest] {
+	newV2 := func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V2VerifiedRequest[exampleAuthData]] {
 		v2 := NewV2(provider)
 		v2.now = now
 		return v2
@@ -25,7 +25,7 @@ func TestV2(t *testing.T) {
 	testV2(t, newV2)
 }
 
-func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, func() time.Time) verifier[T]) {
+func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(CredentialsProvider[exampleAuthData], func() time.Time) verifier[T]) {
 	const accessKeyID = "AKIAIOSFODNN7EXAMPLE"
 
 	provider := simpleCredentialsProvider{
@@ -42,7 +42,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -68,7 +68,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -87,7 +87,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -106,7 +106,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -138,7 +138,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -157,7 +157,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -183,7 +183,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID2, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID2, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -200,7 +200,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -285,7 +285,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID3, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID3, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -340,7 +340,7 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID3, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID3, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)

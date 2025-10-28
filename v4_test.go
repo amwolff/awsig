@@ -20,27 +20,27 @@ const (
 	testDefaultService = "s3"
 )
 
-type v4Verifier struct {
-	v4 *V4
+type v4Verifier[T any] struct {
+	v4 *V4[T]
 }
 
-func (v *v4Verifier) Verify(r *http.Request, _ string) (*V4VerifiedRequest, error) {
+func (v *v4Verifier[T]) Verify(r *http.Request, _ string) (*V4VerifiedRequest[T], error) {
 	return v.v4.Verify(r)
 }
 
 func TestV4(t *testing.T) {
-	newV4 := func(provider CredentialsProvider, now func() time.Time) verifier[*V4VerifiedRequest] {
+	newV4 := func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V4VerifiedRequest[exampleAuthData]] {
 		v4 := NewV4(provider, V4Config{
 			Region:  testDefaultRegion,
 			Service: testDefaultService,
 		})
 		v4.now = now
-		return &v4Verifier{v4: v4}
+		return &v4Verifier[exampleAuthData]{v4: v4}
 	}
 	testV4(t, newV4)
 }
 
-func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, func() time.Time) verifier[T]) {
+func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(CredentialsProvider[exampleAuthData], func() time.Time) verifier[T]) {
 	const accessKeyID = "AKIAIOSFODNN7EXAMPLE"
 
 	provider := simpleCredentialsProvider{
@@ -61,7 +61,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -83,7 +83,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -100,7 +100,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -118,7 +118,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -155,7 +155,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -194,7 +194,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32C)
 			assert.NoError(t, err)
@@ -244,7 +244,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
-			assert.Equal(t, accessKeyID, vr.AccessKeyID())
+			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
 			assert.NoError(t, err)
@@ -269,7 +269,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
@@ -312,7 +312,7 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
-		assert.Equal(t, accessKeyID, vr.AccessKeyID())
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)

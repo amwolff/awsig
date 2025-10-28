@@ -310,7 +310,11 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 	})
 }
 
-type verifier[T VerifiedRequest] interface {
+type exampleAuthData struct {
+	accessKeyID string
+}
+
+type verifier[T VerifiedRequest[exampleAuthData]] interface {
 	Verify(r *http.Request, virtualHostedBucket string) (T, error)
 }
 
@@ -319,11 +323,16 @@ type simpleCredentialsProvider struct {
 	secretAccessKey string
 }
 
-func (p simpleCredentialsProvider) Provide(_ context.Context, accessKeyID string) (secretAccessKey string, _ error) {
+func (p simpleCredentialsProvider) Provide(_ context.Context, accessKeyID string) (secretAccessKey string, _ exampleAuthData, _ error) {
+	var data exampleAuthData
+
 	if accessKeyID != p.accessKeyID {
-		return "", ErrInvalidAccessKeyID
+		return "", data, ErrInvalidAccessKeyID
 	}
-	return p.secretAccessKey, nil
+
+	data.accessKeyID = accessKeyID
+
+	return p.secretAccessKey, data, nil
 }
 
 func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time { //nolint:revive
