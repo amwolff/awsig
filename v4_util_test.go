@@ -122,6 +122,14 @@ func TestSHA256Hash(t *testing.T) {
 	assert.Equal(t, hashTest, hex.EncodeToString(sha256Hash([]byte("test"))))
 }
 
+func TestTrimSpaceLeft(t *testing.T) {
+	assert.Equal(t, "", trimSpaceLeft(""))
+	assert.Equal(t, "", trimSpaceLeft("     "))
+	assert.Equal(t, "text", trimSpaceLeft("text"))
+	assert.Equal(t, "text", trimSpaceLeft("   text"))
+	assert.Equal(t, "text  ", trimSpaceLeft("   text  "))
+}
+
 func mustNewSignatureV4FromEncoded(s string) signatureV4 {
 	signature, err := newSignatureV4FromEncoded([]byte(s))
 	if err != nil {
