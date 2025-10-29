@@ -20,7 +20,7 @@ type (
 	}
 )
 
-func (p *MyCredentialsProvider) Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ MyAuthData, _ error) {
+func (p *MyCredentialsProvider) Provide(_ context.Context, accessKeyID string) (secretAccessKey string, _ MyAuthData, _ error) {
 	var data MyAuthData
 
 	secretAccessKey, ok := p.secretAccessKeys[accessKeyID]
@@ -132,7 +132,7 @@ func Example() {
 	// Hello, World!
 }
 
-func errToHTTPError(w http.ResponseWriter, err error) {
+func errToHTTPError(w http.ResponseWriter, _ error) {
 	defaultCode := http.StatusInternalServerError
 	// TODO: match awsig errors to HTTP codes
 	http.Error(w, http.StatusText(defaultCode), defaultCode)
