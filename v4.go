@@ -679,6 +679,7 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 
 func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool) ([]string, error) {
 	if !skipPrefixCheck {
+		rawSignedHeaders = trimSpaceLeft(rawSignedHeaders) // SDKs such as AWS SDK for Go add space here
 		if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
 			return nil, nestError(
 				ErrAuthorizationHeaderMalformed,
@@ -755,6 +756,7 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 
 func (v4 *V4[T]) parseSignature(rawSignature string, skipPrefixCheck bool) (signatureV4, error) {
 	if !skipPrefixCheck {
+		rawSignature = trimSpaceLeft(rawSignature) // SDKs such as AWS SDK for Go add space here
 		if !strings.HasPrefix(rawSignature, v4AuthorizationHeaderSignaturePrefix) {
 			return nil, nestError(
 				ErrAuthorizationHeaderMalformed,
