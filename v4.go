@@ -399,19 +399,20 @@ func (r *v4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
-type v4VerifiedData struct {
+type v4VerifiedData[T any] struct {
 	dateTime        string
 	credential      parsedCredential
 	options         parsedXAmzContentSHA256
 	secretAccessKey string
+	authData        T
 	seedSignature   signatureV4
 }
 
 // V4VerifiedRequest implements VerifiedRequest for AWS Signature
 // Version 4.
-type V4VerifiedRequest struct {
+type V4VerifiedRequest[T any] struct {
 	form   PostForm
-	data   v4VerifiedData
+	data   v4VerifiedData[T]
 	source io.Reader
 
 	wrapped *v4Reader
@@ -421,8 +422,8 @@ type V4VerifiedRequest struct {
 	integrity       expectedIntegrity
 }
 
-func newV4VerifiedRequestWithForm(source io.Reader, data v4VerifiedData, form PostForm) (*V4VerifiedRequest, error) {
-	vr := &V4VerifiedRequest{
+func newV4VerifiedRequestWithForm[T any](source io.Reader, data v4VerifiedData[T], form PostForm) (*V4VerifiedRequest[T], error) {
+	vr := &V4VerifiedRequest[T]{
 		form:      form,
 		data:      data,
 		source:    source,
@@ -436,21 +437,21 @@ func newV4VerifiedRequestWithForm(source io.Reader, data v4VerifiedData, form Po
 	return vr, nil
 }
 
-func newV4VerifiedRequest(source io.Reader, data v4VerifiedData) (*V4VerifiedRequest, error) {
+func newV4VerifiedRequest[T any](source io.Reader, data v4VerifiedData[T]) (*V4VerifiedRequest[T], error) {
 	return newV4VerifiedRequestWithForm(source, data, nil)
 }
 
-// AccessKeyID implements VerifiedRequest.
-func (vr *V4VerifiedRequest) AccessKeyID() string {
-	return vr.data.credential.accessKeyID
+// AuthData implements VerifiedRequest.
+func (vr *V4VerifiedRequest[T]) AuthData() T {
+	return vr.data.authData
 }
 
 // PostForm implements VerifiedRequest.
-func (vr *V4VerifiedRequest) PostForm() PostForm {
+func (vr *V4VerifiedRequest[T]) PostForm() PostForm {
 	return vr.form
 }
 
-func (vr *V4VerifiedRequest) addAlgorithm(algorithm ChecksumAlgorithm) error {
+func (vr *V4VerifiedRequest[T]) addAlgorithm(algorithm ChecksumAlgorithm) error {
 	if slices.Contains(vr.algorithms, algorithm) {
 		return errors.New("algorithm already added")
 	}
@@ -458,7 +459,7 @@ func (vr *V4VerifiedRequest) addAlgorithm(algorithm ChecksumAlgorithm) error {
 	return nil
 }
 
-func (vr *V4VerifiedRequest) requestChecksum(req ChecksumRequest) error {
+func (vr *V4VerifiedRequest[T]) requestChecksum(req ChecksumRequest) error {
 	if !req.valid() {
 		return fmt.Errorf("uninitialized request")
 	}
@@ -483,7 +484,7 @@ func (vr *V4VerifiedRequest) requestChecksum(req ChecksumRequest) error {
 	return nil
 }
 
-func (vr *V4VerifiedRequest) requestChecksums(reqs []ChecksumRequest) error {
+func (vr *V4VerifiedRequest[T]) requestChecksums(reqs []ChecksumRequest) error {
 	for i, req := range reqs {
 		if err := vr.requestChecksum(req); err != nil {
 			return fmt.Errorf("could not process request %d: %w", i, err)
@@ -493,7 +494,7 @@ func (vr *V4VerifiedRequest) requestChecksums(reqs []ChecksumRequest) error {
 }
 
 // Reader implements VerifiedRequest.
-func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
+func (vr *V4VerifiedRequest[T]) Reader(reqs ...ChecksumRequest) (Reader, error) {
 	if vr.wrapped != nil {
 		if len(reqs) > 0 {
 			return nil, errors.New("cannot request additional checksums after Reader has been requested")
@@ -544,8 +545,8 @@ func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 }
 
 // V4 implements AWS Signature Version 4 verification.
-type V4 struct {
-	provider CredentialsProvider
+type V4[T any] struct {
+	provider CredentialsProvider[T]
 	config   V4Config
 
 	now func() time.Time
@@ -559,15 +560,15 @@ type V4Config struct {
 }
 
 // NewV4 creates a new V4 with the given provider and config.
-func NewV4(provider CredentialsProvider, config V4Config) *V4 {
-	return &V4{
+func NewV4[T any](provider CredentialsProvider[T], config V4Config) *V4[T] {
+	return &V4[T]{
 		provider: provider,
 		config:   config,
 		now:      time.Now,
 	}
 }
 
-func (v4 *V4) parseTime(main, alt string) (string, time.Time, error) {
+func (v4 *V4[T]) parseTime(main, alt string) (string, time.Time, error) {
 	parsed, err := parseTimeWithFormats(main, []string{timeFormatISO8601})
 	if err != nil {
 		parsed, err = parseTimeWithFormats(alt, httpTimeFormats)
@@ -579,7 +580,7 @@ func (v4 *V4) parseTime(main, alt string) (string, time.Time, error) {
 	return main, parsed, nil
 }
 
-func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) {
+func (v4 *V4[T]) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) {
 	if !strings.HasPrefix(rawAlgorithm, v4SigningAlgorithmPrefix) {
 		return 0, nestError(
 			ErrUnsupportedSignature,
@@ -608,7 +609,7 @@ type parsedCredential struct {
 	scope       scope
 }
 
-func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool) (parsedCredential, error) {
+func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool) (parsedCredential, error) {
 	if !skipPrefixCheck {
 		if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
 			return parsedCredential{}, nestError(
@@ -676,7 +677,7 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time, skip
 	}, nil
 }
 
-func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool) ([]string, error) {
+func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool) ([]string, error) {
 	if !skipPrefixCheck {
 		rawSignedHeaders = trimSpaceLeft(rawSignedHeaders) // SDKs such as AWS SDK for Go add space here
 		if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
@@ -753,7 +754,7 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 	return signedHeaders, nil
 }
 
-func (v4 *V4) parseSignature(rawSignature string, skipPrefixCheck bool) (signatureV4, error) {
+func (v4 *V4[T]) parseSignature(rawSignature string, skipPrefixCheck bool) (signatureV4, error) {
 	if !skipPrefixCheck {
 		rawSignature = trimSpaceLeft(rawSignature) // SDKs such as AWS SDK for Go add space here
 		if !strings.HasPrefix(rawSignature, v4AuthorizationHeaderSignaturePrefix) {
@@ -783,7 +784,7 @@ type v4ParsedAuthorization struct {
 	signature     signatureV4
 }
 
-func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
+func (v4 *V4[T]) parseAuthorization(rawAuthorization string, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
 	rawAlgorithm, afterAlgorithm, ok := strings.Cut(rawAuthorization, " ")
 	if !ok {
 		return v4ParsedAuthorization{}, nestError(
@@ -829,7 +830,7 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 	}, nil
 }
 
-func (v4 *V4) parseAuthorizationFromQuery(query url.Values, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
+func (v4 *V4[T]) parseAuthorizationFromQuery(query url.Values, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
 	signingAlgo, err := v4.parseSigningAlgo(query.Get(queryXAmzAlgorithm))
 	if err != nil {
 		return v4ParsedAuthorization{}, err
@@ -868,7 +869,7 @@ type parsedXAmzContentSHA256 struct {
 	sumRequest ChecksumRequest
 }
 
-func (v4 *V4) decodedContentLength(headers http.Header) (int, error) {
+func (v4 *V4[T]) decodedContentLength(headers http.Header) (int, error) {
 	rawDecodedContentLength := headers.Get(headerXAmzDecodedContentLength)
 	if rawDecodedContentLength == "" {
 		return 0, nestError(
@@ -902,7 +903,7 @@ func (v4 *V4) decodedContentLength(headers http.Header) (int, error) {
 	return decodedContentLength, nil
 }
 
-func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.Header) (parsedXAmzContentSHA256, error) {
+func (v4 *V4[T]) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.Header) (parsedXAmzContentSHA256, error) {
 	switch rawXAmzContentSHA256 {
 	case unsignedPayload:
 		return parsedXAmzContentSHA256{
@@ -960,7 +961,7 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.H
 	}, nil
 }
 
-func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
+func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
 	b := newHashBuilder(sha256.New)
 
 	// http verb
@@ -1020,7 +1021,7 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHead
 	return b.Sum()
 }
 
-func (v4 *V4) calculatePostSignature(data signatureV4Data, secretAccessKey string) signatureV4 {
+func (v4 *V4[T]) calculatePostSignature(data signatureV4Data, secretAccessKey string) signatureV4 {
 	if data.algorithm == algorithmECDSAP256SHA256 { // this won't happen; check anyway
 		panic("not implemented")
 	}
@@ -1033,19 +1034,19 @@ func (v4 *V4) calculatePostSignature(data signatureV4Data, secretAccessKey strin
 	return h.Sum(nil)
 }
 
-func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData, error) {
+func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[T], error) {
 	rawDate := form.Get(queryXAmzDate).Value
 
 	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
 	if err != nil {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrInvalidRequest,
 			"the %s form field does not contain a valid date: %w", queryXAmzDate, err,
 		)
 	}
 
 	if v4.now().Before(parsedDateTime) {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrAccessDenied,
 			"the request is not yet valid",
 		)
@@ -1053,30 +1054,30 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData, er
 
 	signingAlgo, err := v4.parseSigningAlgo(form.Get(queryXAmzAlgorithm).Value)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	signature, err := v4.parseSignature(form.Get(queryXAmzSignature).Value, true)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	policy := form.Get(formNamePolicy).Value
 	if policy == "" {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrInvalidRequest,
 			"the %s form field is missing", formNamePolicy,
 		)
 	}
 
-	secretAccessKey, err := v4.provider.Provide(ctx, credential.accessKeyID)
+	secretAccessKey, data, err := v4.provider.Provide(ctx, credential.accessKeyID)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	if !v4.calculatePostSignature(signatureV4Data{
@@ -1087,39 +1088,40 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData, er
 		previous:        nil,
 		digest:          []byte(policy),
 	}, secretAccessKey).compare(signature) {
-		return v4VerifiedData{}, ErrSignatureDoesNotMatch
+		return v4VerifiedData[T]{}, ErrSignatureDoesNotMatch
 	}
 
-	return v4VerifiedData{
+	return v4VerifiedData[T]{
 		dateTime:        rawDate,
 		credential:      credential,
 		options:         parsedXAmzContentSHA256{unsigned: true},
 		secretAccessKey: secretAccessKey,
+		authData:        data,
 		seedSignature:   signature,
 	}, nil
 }
 
-func (v4 *V4) verify(r *http.Request) (v4VerifiedData, error) {
+func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrInvalidRequest,
 			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
 		)
 	}
 
 	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
-		return v4VerifiedData{}, ErrRequestTimeTooSkewed
+		return v4VerifiedData[T]{}, ErrRequestTimeTooSkewed
 	}
 
 	authorization, err := v4.parseAuthorization(r.Header.Get(headerAuthorization), parsedDateTime, r.Header)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrMissingSecurityHeader,
 			"the %s header is missing", headerXAmzContentSha256,
 		)
@@ -1127,12 +1129,12 @@ func (v4 *V4) verify(r *http.Request) (v4VerifiedData, error) {
 
 	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.Header)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
-	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
+	secretAccessKey, data, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	canonicalRequestHash := v4.canonicalRequestHash(r, r.URL.Query(), authorization.signedHeaders, rawXAmzContentSHA256)
@@ -1147,34 +1149,35 @@ func (v4 *V4) verify(r *http.Request) (v4VerifiedData, error) {
 	}, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
-		return v4VerifiedData{}, ErrSignatureDoesNotMatch
+		return v4VerifiedData[T]{}, ErrSignatureDoesNotMatch
 	}
 
-	return v4VerifiedData{
+	return v4VerifiedData[T]{
 		dateTime:        rawDate,
 		credential:      authorization.credential,
 		options:         options,
 		secretAccessKey: secretAccessKey,
+		authData:        data,
 		seedSignature:   signature,
 	}, nil
 }
 
-func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData, error) {
+func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData[T], error) {
 	expires, err := strconv.ParseInt(query.Get(queryXAmzExpires), 10, 64)
 	if err != nil {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrInvalidRequest,
 			"the %s query parameter does not contain a valid integer: %w", queryXAmzExpires, err,
 		)
 	}
 
 	if expires < 0 {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrAuthorizationQueryParametersError,
 			"the %s query parameter is negative", queryXAmzExpires,
 		)
 	} else if expires > 604800 {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrAuthorizationQueryParametersError,
 			"the %s query parameter exceeds the maximum of 604800 seconds (7 days)", queryXAmzExpires,
 		)
@@ -1184,19 +1187,19 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData
 
 	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
 	if err != nil {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrInvalidRequest,
 			"the %s query parameter does not contain a valid date: %w", queryXAmzDate, err,
 		)
 	}
 
 	if v4.now().Before(parsedDateTime) {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrAccessDenied,
 			"the request is not yet valid",
 		)
 	} else if v4.now().After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
-		return v4VerifiedData{}, nestError(
+		return v4VerifiedData[T]{}, nestError(
 			ErrAccessDenied,
 			"the request has expired",
 		)
@@ -1204,14 +1207,14 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData
 
 	authorization, err := v4.parseAuthorizationFromQuery(query, parsedDateTime, r.Header)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	rawXAmzContentSHA256, options := unsignedPayload, parsedXAmzContentSHA256{unsigned: true}
 
-	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
+	secretAccessKey, data, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
-		return v4VerifiedData{}, err
+		return v4VerifiedData[T]{}, err
 	}
 
 	query.Del(queryXAmzSignature)
@@ -1227,21 +1230,22 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData
 	}, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
-		return v4VerifiedData{}, ErrSignatureDoesNotMatch
+		return v4VerifiedData[T]{}, ErrSignatureDoesNotMatch
 	}
 
-	return v4VerifiedData{
+	return v4VerifiedData[T]{
 		dateTime:        rawDate,
 		credential:      authorization.credential,
 		options:         options,
 		secretAccessKey: secretAccessKey,
+		authData:        data,
 		seedSignature:   signature,
 	}, nil
 }
 
 // Verify verifies the AWS Signature Version 4 for the given request and
 // returns a verified request.
-func (v4 *V4) Verify(r *http.Request) (*V4VerifiedRequest, error) {
+func (v4 *V4[T]) Verify(r *http.Request) (*V4VerifiedRequest[T], error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""

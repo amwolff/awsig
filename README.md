@@ -106,3 +106,5 @@ func …(w http.ResponseWriter, r *http.Request) {
 	// Perform additional application logic as needed…
 }
 ```
+
+A complete working example can be found in `awsig_test.go` (`Example`).

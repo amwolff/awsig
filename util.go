@@ -87,9 +87,9 @@ var errMessageTooLarge = errors.New("message too large")
 // CredentialsProvider is the interface that all users of this package
 // must implement. Provide is called by signature verifiers. If the
 // given accessKeyID is unknown to the implementation, it should return
-// an empty Secret Access Key and the ErrInvalidAccessKeyID error.
-type CredentialsProvider interface {
-	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
+// zero values alongside the ErrInvalidAccessKeyID error.
+type CredentialsProvider[T any] interface {
+	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, data T, _ error)
 }
 
 // PostFormElement represents a single element in a multipart form.
@@ -201,8 +201,15 @@ type (
 
 	// VerifiedRequest represents a successfully verified AWS Signature
 	// Version 4 or AWS Signature Version 2 request.
-	VerifiedRequest interface {
-		AccessKeyID() string
+	VerifiedRequest[T any] interface {
+		// AuthData returns data collected while providing credentials
+		// via CredentialsProvider. AuthData's type is determined by the
+		// generic type parameter T to allow flexibility. For example, a
+		// caller that would need to access Access Key ID could call one
+		// of the verifiers with T reserving space for Access Key ID,
+		// which would be filled by the CredentialsProvider
+		// implementation.
+		AuthData() T
 		// PostForm returns the parsed multipart form data if the
 		// request is a POST with "multipart/form-data" Content-Type.
 		PostForm() PostForm
