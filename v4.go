@@ -71,10 +71,10 @@ type v4Reader struct {
 	secretAccessKey string
 
 	integrity            expectedIntegrity
-	decodedContentLength int
+	decodedContentLength int64
 
 	chunkCount             int
-	chunkBytesLeft         int
+	chunkBytesLeft         int64
 	chunkSHA256            hash.Hash
 	chunkPreviousSignature signatureV4
 	chunkExpectedSignature signatureV4
@@ -114,7 +114,7 @@ func (r *v4Reader) consumeCRLF(buf []byte) error {
 	return nil
 }
 
-func (r *v4Reader) readChunkLength(buf []byte) (int, error) {
+func (r *v4Reader) readChunkLength(buf []byte) (int64, error) {
 	var (
 		rawLength      []byte
 		separatorFound bool
@@ -164,7 +164,7 @@ Loop:
 		return 0, ErrIncompleteBody
 	}
 
-	return int(length), nil
+	return length, nil
 }
 
 func (r *v4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, error) {
@@ -187,7 +187,7 @@ func (r *v4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, e
 	return signature, r.consumeCRLF(buf)
 }
 
-func (r *v4Reader) readChunkMeta(buf []byte) (int, signatureV4, error) {
+func (r *v4Reader) readChunkMeta(buf []byte) (int64, signatureV4, error) {
 	length, err := r.readChunkLength(buf)
 	if err != nil {
 		return 0, nil, err
@@ -367,13 +367,13 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	if len(p) > r.chunkBytesLeft {
+	if int64(len(p)) > r.chunkBytesLeft {
 		p = p[:r.chunkBytesLeft]
 	}
 
 	n, err = r.ir.Read(p)
 
-	if r.chunkBytesLeft -= n; r.chunkBytesLeft == 0 {
+	if r.chunkBytesLeft -= int64(n); r.chunkBytesLeft == 0 {
 		r.chunkCount++
 		if !r.unsigned {
 			signature := calculateSignatureV4(r.currentChunkSignatureData(), r.secretAccessKey)
@@ -384,7 +384,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	if r.decodedContentLength -= n; r.decodedContentLength < 0 {
+	if r.decodedContentLength -= int64(n); r.decodedContentLength < 0 {
 		return n, ErrIncompleteBody
 	}
 
@@ -864,12 +864,12 @@ type parsedXAmzContentSHA256 struct {
 	streaming            bool
 	signingAlgo          v4SigningAlgorithm
 	trailer              bool
-	decodedContentLength int
+	decodedContentLength int64
 
 	sumRequest ChecksumRequest
 }
 
-func (v4 *V4[T]) decodedContentLength(headers http.Header) (int, error) {
+func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 	rawDecodedContentLength := headers.Get(headerXAmzDecodedContentLength)
 	if rawDecodedContentLength == "" {
 		return 0, nestError(
@@ -878,7 +878,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int, error) {
 		)
 	}
 
-	decodedContentLength, err := strconv.Atoi(rawDecodedContentLength)
+	decodedContentLength, err := strconv.ParseInt(rawDecodedContentLength, 10, 64)
 	if err != nil {
 		return 0, nestError(
 			ErrInvalidRequest,
