@@ -264,15 +264,14 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 			"delete":                       true,
 		}
 
+		maps.DeleteFunc(query, func(p string, _ []string) bool {
+			_, ok := included[p]
+			return !ok
+		})
 		queryParams := slices.Collect(maps.Keys(query))
 		slices.Sort(queryParams)
 
 		for i, p := range queryParams {
-			encode, ok := included[p]
-			if !ok {
-				continue
-			}
-
 			if i == 0 {
 				b.WriteByte('?')
 			}
@@ -284,7 +283,7 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 				b.WriteString(p)
 				if v != "" {
 					b.WriteByte('=')
-					if encode {
+					if included[p] {
 						b.WriteString(uriEncode(v, false))
 					} else {
 						b.WriteString(v)

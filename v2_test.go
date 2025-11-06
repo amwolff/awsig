@@ -97,6 +97,26 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		assert.That(t, n == 0)
 		assert.That(t, errors.Is(err, io.EOF))
 	})
+	t.Run("List versions", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?versions&prefix=photos&max-keys=50&marker=puppy", nil)
+		req.Header.Add("User-Agent", "Mozilla/5.0")
+		req.Header.Add("Date", "Tue, 27 Mar 2007 19:42:41 +0000")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:mi9g7igU2tMoWcHDpL4UcWKaf0I=")
+
+		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 42, 41))
+
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
+
+		r, err := vr.Reader()
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
+	})
 	t.Run("Fetch", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?acl", nil)
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:44:46 +0000")
