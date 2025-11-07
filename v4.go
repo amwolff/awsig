@@ -400,6 +400,16 @@ func (r *v4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
+type invalidContentSHA256Reader struct{}
+
+func (r invalidContentSHA256Reader) Read(_ []byte) (n int, err error) {
+	return 0, ErrInvalidXAmzContentSHA256
+}
+
+func (r invalidContentSHA256Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
+	return nil, ErrInvalidXAmzContentSHA256
+}
+
 type v4VerifiedData[T any] struct {
 	dateTime        string
 	credential      parsedCredential
@@ -508,6 +518,10 @@ func (vr *V4VerifiedRequest[T]) Reader(reqs ...ChecksumRequest) (Reader, error) 
 	}
 	if vr.data.options.trailer && vr.trailingSumAlgo == nil {
 		return nil, errors.New("the trailing checksum algorithm must be specified when the request contains a trailing header")
+	}
+
+	if vr.data.options.invalid {
+		return invalidContentSHA256Reader{}, nil
 	}
 
 	var (
@@ -868,6 +882,7 @@ type parsedXAmzContentSHA256 struct {
 	decodedContentLength int64
 
 	sumRequest ChecksumRequest
+	invalid    bool
 }
 
 func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
@@ -960,6 +975,17 @@ func (v4 *V4[T]) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers htt
 	return parsedXAmzContentSHA256{
 		sumRequest: sumRequest,
 	}, nil
+}
+
+func (v4 *V4[T]) parsePresignedXAmzContentSHA256(rawXAmzContentSHA256 string) parsedXAmzContentSHA256 {
+	if rawXAmzContentSHA256 == unsignedPayload {
+		return parsedXAmzContentSHA256{unsigned: true}
+	}
+	sumRequest, err := NewChecksumRequest(algorithmHashedPayload, rawXAmzContentSHA256)
+	if err != nil {
+		return parsedXAmzContentSHA256{invalid: true}
+	}
+	return parsedXAmzContentSHA256{sumRequest: sumRequest}
 }
 
 func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
@@ -1211,12 +1237,16 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, err
 	}
 
-	rawXAmzContentSHA256, options := unsignedPayload, parsedXAmzContentSHA256{unsigned: true}
-
 	secretAccessKey, data, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
+
+	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
+	if rawXAmzContentSHA256 == "" {
+		rawXAmzContentSHA256 = unsignedPayload
+	}
+	options := v4.parsePresignedXAmzContentSHA256(rawXAmzContentSHA256)
 
 	query.Del(queryXAmzSignature)
 	canonicalRequestHash := v4.canonicalRequestHash(r, query, authorization.signedHeaders, rawXAmzContentSHA256)

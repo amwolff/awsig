@@ -23,6 +23,8 @@ var (
 	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
 	// ErrBadDigest indicates the BadDigest error code.
 	ErrBadDigest = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
+	// ErrInvalidXAmzContentSHA256 indicates that the value provided for the X-Amz-Content-Sha256 header is not valid.
+	ErrInvalidXAmzContentSHA256 = errors.New("the provided 'x-amz-content-sha256' header does not match what was computed")
 	// ErrEntityTooLarge indicates the EntityTooLarge error code.
 	ErrEntityTooLarge = errors.New("your proposed upload exceeds the maximum allowed object size")
 	// ErrEntityTooSmall indicates the EntityTooSmall error code.
