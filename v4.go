@@ -57,6 +57,12 @@ const (
 	lf = '\n'
 )
 
+// requiredSignedHeaders contains headers that must be signed if they are present.
+var requiredSignedHeaders = map[string]struct{}{
+	headerHost:     {},
+	headerXAmzDate: {},
+}
+
 type v4Reader struct {
 	r  io.Reader
 	ir *integrityReader
@@ -707,10 +713,7 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 	signedHeaders := strings.Split(rawSignedHeaders, ";")
 	signedHeadersLookup := make(map[string]struct{})
 
-	var (
-		hostFound      bool
-		previousHeader string
-	)
+	var previousHeader string
 	for _, header := range signedHeaders {
 		if header != strings.ToLower(header) {
 			return nil, nestError(
@@ -724,45 +727,17 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 				"the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader,
 			)
 		}
-
-		if header == headerHost {
-			hostFound = true
-		} else if _, ok := actualHeaders[textproto.CanonicalMIMEHeaderKey(header)]; !ok {
-			return nil, nestError(
-				ErrMissingSecurityHeader,
-				"the %s signed header is not present in the request", header,
-			)
-		}
-
 		previousHeader, signedHeadersLookup[header] = header, struct{}{}
 	}
 
-	if !hostFound {
-		return nil, nestError(
-			ErrMissingSecurityHeader,
-			"the SignedHeaders parameter does not contain the host header",
-		)
-	}
-
-	for key := range actualHeaders {
-		if strings.EqualFold(key, headerXAmzContentSha256) {
-			continue
-		}
-		if strings.EqualFold(key, headerContentMD5) {
-			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
-				return nil, nestError(
-					ErrMissingSecurityHeader,
-					"the SignedHeaders parameter does not contain the %s header", headerContentMD5,
-				)
-			}
-		}
-		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
-			if _, ok := signedHeadersLookup[k]; !ok {
-				return nil, nestError(
-					ErrMissingSecurityHeader,
-					"the SignedHeaders parameter does not contain the %s header", k,
-				)
-			}
+	for header := range requiredSignedHeaders {
+		_, exists := actualHeaders[textproto.CanonicalMIMEHeaderKey(header)]
+		_, signed := signedHeadersLookup[header]
+		if exists && !signed {
+			return nil, nestError(
+				ErrAccessDenied,
+				"there were headers present in the request which were not signed",
+			)
 		}
 	}
 
@@ -1149,8 +1124,8 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
 		return v4VerifiedData[T]{}, nestError(
-			ErrMissingSecurityHeader,
-			"the %s header is missing", headerXAmzContentSha256,
+			ErrInvalidRequest,
+			"missing required header for this request: %s", headerXAmzContentSha256,
 		)
 	}
 
