@@ -12,6 +12,7 @@ import (
 	"maps"
 	"mime"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"slices"
 	"strconv"
@@ -712,7 +713,7 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 
 		if header == headerHost {
 			hostFound = true
-		} else if actualHeaders.Get(header) == "" {
+		} else if _, ok := actualHeaders[textproto.CanonicalMIMEHeaderKey(header)]; !ok {
 			return nil, nestError(
 				ErrMissingSecurityHeader,
 				"the %s signed header is not present in the request", header,

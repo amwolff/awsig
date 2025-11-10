@@ -356,6 +356,17 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		assert.That(t, errors.Is(err, ErrAccessDenied))
 	})
 
+	t.Run("signed header with empty value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/", nil)
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-type;host;x-amz-date,Signature=0ed109d305d381a42dd12b1b04ccbb95b690b0d8571d07e6c55765a8044f1d15")
+		req.Header.Add("Content-Type", "")
+		req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+		req.Header.Add("x-amz-date", "20130524T000000Z")
+
+		_, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+	})
+
 	t.Run("skip region verification", func(t *testing.T) {
 		v4 := NewV4(provider, V4Config{
 			Service:                testDefaultService,
