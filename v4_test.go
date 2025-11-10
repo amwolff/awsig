@@ -51,6 +51,9 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 	now := dummyNow(2013, time.May, 24, 0, 0, 0)
 	v4 := newV4(provider, now)
 
+	putContent := "Welcome to Amazon S3."
+	putContentSHA256 := "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072"
+
 	t.Run("single chunk", func(t *testing.T) {
 		t.Run("GET Object", func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
@@ -72,9 +75,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			assert.That(t, errors.Is(err, io.EOF))
 		})
 		t.Run("PUT Object", func(t *testing.T) {
-			const content = "Welcome to Amazon S3."
-
-			req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test$file.text", strings.NewReader(content))
+			req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test$file.text", strings.NewReader(putContent))
 			req.Header.Add("Date", "Fri, 24 May 2013 00:00:00 GMT")
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class,Signature=98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd")
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -90,7 +91,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
-			assert.Equal(t, content, string(b))
+			assert.Equal(t, putContent, string(b))
 		})
 		t.Run("GET Bucket Lifecycle", func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/?lifecycle", nil)
@@ -365,6 +366,49 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		_, err := v4.Verify(req, "")
 		assert.NoError(t, err)
+	})
+
+	t.Run("presigned with valid and correct X-Amz-Content-Sha256", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host%3Bx-amz-content-sha256&X-Amz-Signature=b5b92f39a5ff837795461644993ce486dd485b7622264c40f89b2a9b069ab5a0", strings.NewReader(putContent))
+		req.Header.Add("X-Amz-Content-Sha256", putContentSHA256)
+
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
+		assert.NoError(t, err)
+
+		b, err := io.ReadAll(r)
+		assert.NoError(t, err)
+		assert.Equal(t, putContent, string(b))
+	})
+
+	t.Run("presigned with valid and incorrect X-Amz-Content-Sha256", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host%3Bx-amz-content-sha256&X-Amz-Signature=cb896aee36e464e8c158bcd4b93f3b3b0382182cdfefcc4de71a62f5063a3d39", strings.NewReader(putContent))
+		req.Header.Add("X-Amz-Content-Sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
+		assert.NoError(t, err)
+
+		_, err = io.ReadAll(r)
+		assert.That(t, errors.Is(err, ErrBadDigest))
+	})
+
+	t.Run("presigned with invalid X-Amz-Content-Sha256", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host%3Bx-amz-content-sha256&X-Amz-Signature=4dfbfe6ce6e0352f78514251486e2d2f4c0314f858bb8e5237efdcf40bc79aef", nil)
+		req.Header.Add("X-Amz-Content-Sha256", "invalid-sha256")
+
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		reader, err := vr.Reader()
+		assert.NoError(t, err)
+
+		_, err = io.ReadAll(reader)
+		assert.That(t, errors.Is(err, ErrInvalidXAmzContentSHA256))
 	})
 
 	t.Run("skip region verification", func(t *testing.T) {
