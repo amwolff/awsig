@@ -15,48 +15,69 @@ import (
 )
 
 var (
-	// ErrAccessDenied indicates the AccessDenied error code.
-	ErrAccessDenied = errors.New("access denied")
 	// ErrAuthorizationHeaderMalformed indicates the AuthorizationHeaderMalformed error code.
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
-	// ErrAuthorizationQueryParametersError indicates the AuthorizationQueryParametersError error code.
-	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
 	// ErrBadDigest indicates the BadDigest error code.
 	ErrBadDigest = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
-	// ErrInvalidXAmzContentSHA256 indicates that the value provided for the X-Amz-Content-Sha256 header is not valid.
-	ErrInvalidXAmzContentSHA256 = errors.New("the provided 'x-amz-content-sha256' header does not match what was computed")
+	// ErrContentLengthWithTransferEncoding indicates that both the Content-Length and Transfer-Encoding headers were provided.
+	ErrContentLengthWithTransferEncoding = errors.New("the Content-Length and Transfer-Encoding headers must not both be provided")
 	// ErrEntityTooLarge indicates the EntityTooLarge error code.
 	ErrEntityTooLarge = errors.New("your proposed upload exceeds the maximum allowed object size")
 	// ErrEntityTooSmall indicates the EntityTooSmall error code.
 	ErrEntityTooSmall = errors.New("your proposed upload is smaller than the minimum allowed object size")
 	// ErrIncompleteBody indicates the IncompleteBody error code.
 	ErrIncompleteBody = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
+	// ErrInvalidAccessKeyID indicates the InvalidAccessKeyID error code.
+	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 	// ErrInvalidArgument indicates the InvalidArgument error code.
 	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrInvalidDateHeader indicates that the X-Amz-Date or Date header is malformed.
+	ErrInvalidDateHeader = errors.New("the x-amz-date or date header does not contain a valid date")
 	// ErrInvalidDigest indicates the InvalidDigest error code.
 	ErrInvalidDigest = errors.New("the Content-MD5 or checksum value that you specified is not valid")
+	// ErrInvalidPOSTDate indicates that the X-Amz-Date form field is malformed.
+	ErrInvalidPOSTDate = errors.New("the X-Amz-Date form field does not contain a valid date")
+	// ErrInvalidPresignedDate indicates that the date provided in a presigned URL is malformed.
+	ErrInvalidPresignedDate = errors.New("the X-Amz-Date query parameter does not contain a valid date")
+	// ErrInvalidPresignedExpiration indicates that the expiration provided in a presigned URL is not a valid integer.
+	ErrInvalidPresignedExpiration = errors.New("the X-Amz-Expires query parameter does not contain a valid integer")
+	// ErrInvalidPresignedXAmzContentSHA256 is returned when attempting to read from the body of a presigned request
+	// that provided an invalid value for the X-Amz-Content-Sha256 header.
+	ErrInvalidPresignedXAmzContentSHA256 = errors.New("the provided 'x-amz-content-sha256' header does not match what was computed")
 	// ErrInvalidRequest indicates the InvalidRequest error code.
 	ErrInvalidRequest = errors.New("invalid request")
 	// ErrInvalidSignature indicates the InvalidSignature error code.
 	ErrInvalidSignature = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrInvalidXAmzContentSHA256 indicates that the X-Amz-Content-Sha256 header has an invalid value.
+	ErrInvalidXAmzContentSHA256 = errors.New("the x-amz-content-sha256 header does not contain a valid value")
+	// ErrInvalidXAmzDecodedContentSHA256 indicates that the X-Amz-Decoded-Content-Length header has an invalid value.
+	ErrInvalidXAmzDecodedContentSHA256 = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
+	// ErrMalformedPOSTRequest indicates that a POST request is malformed.
+	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
 	// ErrMissingAuthenticationToken indicates the MissingAuthenticationToken error code.
 	ErrMissingAuthenticationToken = errors.New("the request was not signed")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
 	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
+	// ErrMissingPOSTPolicy indicates that the POST policy was not provided.
+	ErrMissingPOSTPolicy = errors.New("the Policy form field is missing")
 	// ErrMissingSecurityHeader indicates the MissingSecurityHeader error code.
 	ErrMissingSecurityHeader = errors.New("your request is missing a required header")
+	// ErrNegativePresignedExpiration indicates that the expiration provided in a presigned URL is negative integer.
+	ErrNegativePresignedExpiration = errors.New("the X-Amz-Expires query parameter is negative")
+	// ErrNotImplemented indicates the NotImplemented error code.
+	ErrNotImplemented = errors.New("a header that you provided implies functionality that is not implemented")
+	// ErrPresignedExpirationTooLarge indicates that the expiration provided in a presigned URL is too large.
+	ErrPresignedExpirationTooLarge = errors.New("the X-Amz-Expires query parameter exceeds the maximum of 604800 seconds (7 days)")
+	// ErrRequestExpired indicates that the request's expiration date has passed.
+	ErrRequestExpired = errors.New("the request has expired")
+	// ErrRequestNotYetValid indicates that the request's date is in the future.
+	ErrRequestNotYetValid = errors.New("the request is not yet valid")
 	// ErrRequestTimeTooSkewed indicates the RequestTimeTooSkewed error code.
 	ErrRequestTimeTooSkewed = errors.New("the difference between the request time and the server's time is too large")
 	// ErrSignatureDoesNotMatch indicates the SignatureDoesNotMatch error code.
 	ErrSignatureDoesNotMatch = errors.New("the request signature that the server calculated does not match the signature that you provided")
 	// ErrUnsupportedSignature indicates the UnsupportedSignature error code.
 	ErrUnsupportedSignature = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
-
-	// ErrInvalidAccessKeyID indicates the InvalidAccessKeyID error code.
-	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
-
-	// ErrNotImplemented indicates the NotImplemented error code.
-	ErrNotImplemented = errors.New("a header that you provided implies functionality that is not implemented")
 )
 
 const (

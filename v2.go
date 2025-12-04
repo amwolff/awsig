@@ -336,10 +336,7 @@ func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2Verified
 	headerDateValue := r.Header.Get(headerDate)
 	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), headerDateValue)
 	if err != nil {
-		return v2VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
-		)
+		return v2VerifiedData[T]{}, ErrInvalidDateHeader
 	}
 
 	if timeSkewExceeded(v2.now, parsedDateTime, maxRequestTimeSkew) {
@@ -372,14 +369,11 @@ func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHoste
 
 	expires, err := strconv.ParseInt(rawExpires, 10, 64)
 	if err != nil {
-		return v2VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s query parameter does not contain a valid integer: %w", queryExpires, err,
-		)
+		return v2VerifiedData[T]{}, ErrInvalidPresignedExpiration
 	}
 
-	if timeOutOfBounds(v2.now, time.Time{}, time.Unix(expires, 0)) {
-		return v2VerifiedData[T]{}, ErrAccessDenied
+	if v2.now().After(time.Unix(expires, 0)) {
+		return v2VerifiedData[T]{}, ErrRequestExpired
 	}
 
 	signature, err := newSignatureV2FromEncoded(query.Get(querySignature))
@@ -416,10 +410,7 @@ func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2Verifie
 	if r.Method == http.MethodPost && typ == "multipart/form-data" {
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, nestError(
-				ErrInvalidRequest,
-				"unable to parse multipart form data: %w", err,
-			)
+			return nil, ErrMalformedPOSTRequest
 		}
 		data, err := v2.verifyPost(r.Context(), form)
 		if err != nil {
