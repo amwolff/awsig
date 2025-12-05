@@ -403,11 +403,11 @@ func (r *v4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 type invalidContentSHA256Reader struct{}
 
 func (r invalidContentSHA256Reader) Read(_ []byte) (n int, err error) {
-	return 0, ErrInvalidXAmzContentSHA256
+	return 0, ErrInvalidPresignedXAmzContentSHA256
 }
 
 func (r invalidContentSHA256Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
-	return nil, ErrInvalidXAmzContentSHA256
+	return nil, ErrInvalidPresignedXAmzContentSHA256
 }
 
 type v4VerifiedData[T any] struct {
@@ -896,19 +896,13 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 
 	decodedContentLength, err := strconv.ParseInt(rawDecodedContentLength, 10, 64)
 	if err != nil {
-		return 0, nestError(
-			ErrInvalidRequest,
-			"the %s header does not contain a valid integer: %w", headerXAmzDecodedContentLength, err,
-		)
+		return 0, ErrInvalidXAmzDecodedContentSHA256
 	}
 
 	cl := headers.Get(headerContentLength)
 	te := headers.Get(headerTransferEncoding)
 	if cl != "" && (te != "" && te != "identity") {
-		return 0, nestError(
-			ErrInvalidRequest,
-			"the %s header must have been omitted", headerContentLength,
-		)
+		return 0, ErrContentLengthWithTransferEncoding
 	} else if cl == "" && te == "" {
 		return 0, nestError(
 			ErrMissingContentLength,
@@ -966,10 +960,7 @@ func (v4 *V4[T]) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers htt
 
 	sumRequest, err := NewChecksumRequest(algorithmHashedPayload, rawXAmzContentSHA256)
 	if err != nil {
-		return parsedXAmzContentSHA256{}, nestError(
-			ErrInvalidRequest,
-			"the %s header does not contain a valid value: %w", headerXAmzContentSha256, err,
-		)
+		return parsedXAmzContentSHA256{}, ErrInvalidXAmzContentSHA256
 	}
 
 	return parsedXAmzContentSHA256{
@@ -1066,17 +1057,11 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 
 	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
 	if err != nil {
-		return v4VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s form field does not contain a valid date: %w", queryXAmzDate, err,
-		)
+		return v4VerifiedData[T]{}, ErrInvalidPOSTDate
 	}
 
 	if v4.now().Before(parsedDateTime) {
-		return v4VerifiedData[T]{}, nestError(
-			ErrAccessDenied,
-			"the request is not yet valid",
-		)
+		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	}
 
 	signingAlgo, err := v4.parseSigningAlgo(form.Get(queryXAmzAlgorithm).Value)
@@ -1096,10 +1081,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 
 	policy := form.Get(formNamePolicy).Value
 	if policy == "" {
-		return v4VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s form field is missing", formNamePolicy,
-		)
+		return v4VerifiedData[T]{}, ErrMissingPOSTPolicy
 	}
 
 	secretAccessKey, data, err := v4.provider.Provide(ctx, credential.accessKeyID)
@@ -1131,10 +1113,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
-		return v4VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
-		)
+		return v4VerifiedData[T]{}, ErrInvalidDateHeader
 	}
 
 	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
@@ -1192,44 +1171,26 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData[T], error) {
 	expires, err := strconv.ParseInt(query.Get(queryXAmzExpires), 10, 64)
 	if err != nil {
-		return v4VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s query parameter does not contain a valid integer: %w", queryXAmzExpires, err,
-		)
+		return v4VerifiedData[T]{}, ErrInvalidPresignedExpiration
 	}
 
 	if expires < 0 {
-		return v4VerifiedData[T]{}, nestError(
-			ErrAuthorizationQueryParametersError,
-			"the %s query parameter is negative", queryXAmzExpires,
-		)
+		return v4VerifiedData[T]{}, ErrNegativePresignedExpiration
 	} else if expires > 604800 {
-		return v4VerifiedData[T]{}, nestError(
-			ErrAuthorizationQueryParametersError,
-			"the %s query parameter exceeds the maximum of 604800 seconds (7 days)", queryXAmzExpires,
-		)
+		return v4VerifiedData[T]{}, ErrPresignedExpirationTooLarge
 	}
 
 	rawDate := query.Get(queryXAmzDate)
 
 	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
 	if err != nil {
-		return v4VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s query parameter does not contain a valid date: %w", queryXAmzDate, err,
-		)
+		return v4VerifiedData[T]{}, ErrInvalidPresignedDate
 	}
 
 	if v4.now().Before(parsedDateTime) {
-		return v4VerifiedData[T]{}, nestError(
-			ErrAccessDenied,
-			"the request is not yet valid",
-		)
+		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	} else if v4.now().After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
-		return v4VerifiedData[T]{}, nestError(
-			ErrAccessDenied,
-			"the request has expired",
-		)
+		return v4VerifiedData[T]{}, ErrRequestExpired
 	}
 
 	authorization, err := v4.parseAuthorizationFromQuery(query, parsedDateTime, r.Header)
@@ -1285,10 +1246,7 @@ func (v4 *V4[T]) Verify(r *http.Request) (*V4VerifiedRequest[T], error) {
 	if r.Method == http.MethodPost && typ == "multipart/form-data" {
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, nestError(
-				ErrInvalidRequest,
-				"unable to parse multipart form data: %w", err,
-			)
+			return nil, ErrMalformedPOSTRequest
 		}
 		data, err := v4.verifyPost(r.Context(), form)
 		if err != nil {

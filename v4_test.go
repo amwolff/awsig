@@ -354,7 +354,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		v4 := newV4(provider, dummyNow(2015, time.December, 28, 0, 0, 0))
 
 		_, err = v4.Verify(req, "")
-		assert.That(t, errors.Is(err, ErrAccessDenied))
+		assert.That(t, errors.Is(err, ErrRequestNotYetValid))
 	})
 
 	t.Run("signed header with empty value", func(t *testing.T) {
@@ -408,7 +408,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		assert.NoError(t, err)
 
 		_, err = io.ReadAll(reader)
-		assert.That(t, errors.Is(err, ErrInvalidXAmzContentSHA256))
+		assert.That(t, errors.Is(err, ErrInvalidPresignedXAmzContentSHA256))
 	})
 
 	t.Run("skip region verification", func(t *testing.T) {
