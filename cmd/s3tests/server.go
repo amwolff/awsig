@@ -574,14 +574,6 @@ func xmlHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, 
 	}
 }
 
-// AuthorizationHeaderMalformed
-// InvalidAccessKeyId
-// InvalidArgument
-// InvalidRequest
-// MissingAuthenticationToken
-// RequestTimeTooSkewed
-// SignatureDoesNotMatch
-
 func awsigErrorToHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, awsig.ErrAuthorizationHeaderMalformed):
