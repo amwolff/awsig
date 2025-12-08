@@ -1,3 +1,5 @@
+// s3tests is a mock S3 server using awsig that helps running a subset
+// of ceph/s3-tests against it.
 package main
 
 import (
@@ -239,11 +241,13 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 		log.WarnContext(ctx, "invalid max-keys parameter", "value", rawMaxKeys)
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "Provided max-keys not an integer or within integer range")
 		return
-	} else if maxKeys < 0 {
+	}
+	if maxKeys < 0 {
 		log.WarnContext(ctx, "invalid max-keys parameter", "value", rawMaxKeys)
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "max-keys cannot be negative")
 		return
-	} else if maxKeys < len(s.data[bckt].objects) {
+	}
+	if maxKeys < len(s.data[bckt].objects) {
 		xmlHTTPErrorNotImplemented(ctx, s.log, w)
 		return
 	}
@@ -259,7 +263,7 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 	type (
 		listVersionsResultVersion struct {
 			Key          string      `xml:"Key"`
-			VersionId    string      `xml:"VersionId"`
+			VersionID    string      `xml:"VersionId"`
 			IsLatest     bool        `xml:"IsLatest"`
 			LastModified string      `xml:"LastModified"`
 			ETag         string      `xml:"ETag"`
@@ -272,7 +276,7 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 			Name            string                      `xml:"Name"`
 			Prefix          string                      `xml:"Prefix"`
 			KeyMarker       string                      `xml:"KeyMarker"`
-			VersionIdMarker string                      `xml:"VersionIdMarker"`
+			VersionIDMarker string                      `xml:"VersionIdMarker"`
 			MaxKeys         int                         `xml:"MaxKeys"`
 			EncodingType    string                      `xml:"EncodingType,omitempty"`
 			IsTruncated     bool                        `xml:"IsTruncated"`
@@ -287,11 +291,11 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 		IsTruncated:  false,
 	}
 
-	// TOOD(amwolff): validate bucket exists
+	// TODO(amwolff): validate bucket exists
 	for _, o := range s.data[bckt].objects {
 		result.Version = append(result.Version, listVersionsResultVersion{
 			Key:          o.name,
-			VersionId:    "null",
+			VersionID:    "null",
 			IsLatest:     true,
 			LastModified: o.created.UTC().Format("2006-01-02T15:04:05.000Z"),
 			Size:         int64(len(o.data)),
@@ -345,7 +349,7 @@ func (s *service) createBucket(w http.ResponseWriter, r *http.Request) {
 
 	log.DebugContext(ctx, "body should be a valid XML", "body", string(b))
 
-	// TOOD(amwolff): validate bucket does not exist + name rules
+	// TODO(amwolff): validate bucket does not exist + name rules
 	s.data[bckt] = bucket{
 		name:    bckt,
 		created: time.Now(),
@@ -401,7 +405,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TOOD(amwolff): validate bucket exists
+	// TODO(amwolff): validate bucket exists
 	bucket := s.data[bckt]
 	bucket.objects = append(bucket.objects, object{
 		name:    name,
@@ -439,7 +443,7 @@ func (s *service) deleteObjects(w http.ResponseWriter, r *http.Request) {
 			Key              string `xml:"Key"`
 			LastModifiedTime string `xml:"LastModifiedTime"`
 			Size             int64  `xml:"Size"`
-			VersionId        string `xml:"VersionId"`
+			VersionID        string `xml:"VersionId"`
 		}
 		delete struct {
 			XMLName xml.Name       `xml:"Delete"`
@@ -469,14 +473,14 @@ func (s *service) deleteObjects(w http.ResponseWriter, r *http.Request) {
 
 	var deletable []string // not that atomicity matters here…
 	for _, o := range request.Object {
-		if o.ETag != "" || o.LastModifiedTime != "" || o.Size != 0 || (o.VersionId != "" && o.VersionId != "null") {
+		if o.ETag != "" || o.LastModifiedTime != "" || o.Size != 0 || (o.VersionID != "" && o.VersionID != "null") {
 			xmlHTTPErrorNotImplemented(ctx, s.log, w)
 			return
 		}
 		deletable = append(deletable, o.Key)
 	}
 
-	// TOOD(amwolff): validate bucket exists
+	// TODO(amwolff): validate bucket exists
 	bucket := s.data[bckt]
 	bucket.objects = slices.DeleteFunc(s.data[bckt].objects, func(o object) bool {
 		return slices.Contains(deletable, o.name)
@@ -507,7 +511,7 @@ func (s *service) deleteBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	log = log.With("Access Key ID", vr.AuthData().accessKeyID)
 
-	// TOOD(amwolff): validate bucket exists
+	// TODO(amwolff): validate bucket exists
 	if len(s.data[bckt].objects) > 0 {
 		log.WarnContext(ctx, "bucket not empty", "objects", len(s.data[bckt].objects))
 		xmlHTTPError(ctx, log, w, http.StatusConflict, "BucketNotEmpty", "The bucket you tried to delete is not empty")
