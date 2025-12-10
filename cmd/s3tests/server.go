@@ -161,7 +161,7 @@ func (s *service) listBuckets(w http.ResponseWriter, r *http.Request) {
 	log := s.log.With("action", "ListBuckets", "headers", r.Header, "query", query)
 
 	if len(query) > 0 {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
@@ -223,7 +223,7 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 
 	for v := range query {
 		if !slices.Contains([]string{"versions", "encoding-type", "max-keys"}, v) {
-			xmlHTTPErrorNotImplemented(ctx, s.log, w)
+			xmlHTTPErrorNotImplemented(ctx, log, w)
 			return
 		}
 	}
@@ -248,7 +248,7 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if maxKeys < len(s.data[bckt].objects) {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
@@ -321,7 +321,7 @@ func (s *service) createBucket(w http.ResponseWriter, r *http.Request) {
 	log := s.log.With("action", "CreateBucket", "bucket", bckt, "headers", r.Header, "query", query)
 
 	if len(query) > 0 {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
@@ -366,7 +366,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 	log := s.log.With("action", "PutObject", "bucket", bckt, "object", name, "headers", r.Header, "query", query)
 
 	if len(query) > 0 {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
@@ -387,6 +387,10 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
 		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
 		if err != nil {
+			// TODO(amwolff): NewChecksumRequest should return
+			// awsig.InvalidDigest without the caller having to presume
+			// that the underlying error maps to the InvalidDigest error
+			// code.
 			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0])
 			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidDigest", "The Content-MD5 you specified was invalid.")
 			return
@@ -436,7 +440,7 @@ func (s *service) deleteObjects(w http.ResponseWriter, r *http.Request) {
 	log := s.log.With("action", "DeleteObjects", "bucket", bckt, "headers", r.Header, "query", query)
 
 	if len(query) != 1 || !query.Has("delete") {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
@@ -478,14 +482,14 @@ func (s *service) deleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !request.Quiet {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
 	var deletable []string // not that atomicity matters here…
 	for _, o := range request.Object {
 		if o.ETag != "" || o.LastModifiedTime != "" || o.Size != 0 || (o.VersionID != "" && o.VersionID != "null") {
-			xmlHTTPErrorNotImplemented(ctx, s.log, w)
+			xmlHTTPErrorNotImplemented(ctx, log, w)
 			return
 		}
 		deletable = append(deletable, o.Key)
@@ -510,7 +514,7 @@ func (s *service) deleteBucket(w http.ResponseWriter, r *http.Request) {
 	log := s.log.With("action", "DeleteBucket", "bucket", bckt, "headers", r.Header, "query", query)
 
 	if len(query) > 0 {
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		xmlHTTPErrorNotImplemented(ctx, log, w)
 		return
 	}
 
