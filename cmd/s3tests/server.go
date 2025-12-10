@@ -383,22 +383,6 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if v, ok := r.Header[http.CanonicalHeaderKey("x-amz-acl")]; ok {
-		if !slices.Contains([]string{
-			"private",
-			"public-read", "public-read-write",
-			"aws-exec-read",
-			"authenticated-read",
-			"bucket-owner-read", "bucket-owner-full-control",
-			"log-delivery-write",
-		}, v[0]) {
-			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "")
-			return
-		}
-		xmlHTTPErrorNotImplemented(ctx, s.log, w)
-		return
-	}
-
 	var sumReqs []awsig.ChecksumRequest
 	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
 		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
@@ -609,6 +593,8 @@ func awsigErrorToHTTPError(ctx context.Context, log *slog.Logger, w http.Respons
 	switch {
 	case errors.Is(err, awsig.ErrAuthorizationHeaderMalformed):
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "The authorization header that you provided is not valid.")
+	case errors.Is(err, awsig.ErrBadDigest):
+		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "BadDigest", "The Content-MD5 or checksum value that you specified did not match what the server received.")
 	case errors.Is(err, awsig.ErrInvalidAccessKeyID):
 		xmlHTTPError(ctx, log, w, http.StatusForbidden, "InvalidAccessKeyId", "The AWS access key ID that you provided does not exist in our records.")
 	case errors.Is(err, awsig.ErrInvalidArgument):
