@@ -370,15 +370,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vr, err := s.v2v4.Verify(r, s.vhost)
-	if err != nil {
-		log.WarnContext(ctx, "failed to verify request", "error", err)
-		awsigErrorToHTTPError(ctx, log, w, err)
-		return
-	}
-	log = log.With("Access Key ID", vr.AuthData().accessKeyID)
-
-	rawContentLength, ok := r.Header["Content-Length"]
+	rawContentLength, ok := r.Header[http.CanonicalHeaderKey("content-length")]
 	if !ok {
 		log.WarnContext(ctx, "missing Content-Length header")
 		xmlHTTPError(ctx, log, w, http.StatusLengthRequired, "MissingContentLength", "You must provide the Content-Length HTTP header.")
@@ -391,7 +383,42 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rd, err := vr.Reader()
+	if v, ok := r.Header[http.CanonicalHeaderKey("x-amz-acl")]; ok {
+		if !slices.Contains([]string{
+			"private",
+			"public-read", "public-read-write",
+			"aws-exec-read",
+			"authenticated-read",
+			"bucket-owner-read", "bucket-owner-full-control",
+			"log-delivery-write",
+		}, v[0]) {
+			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "")
+			return
+		}
+		xmlHTTPErrorNotImplemented(ctx, s.log, w)
+		return
+	}
+
+	var sumReqs []awsig.ChecksumRequest
+	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
+		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
+		if err != nil {
+			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0])
+			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidDigest", "The Content-MD5 you specified was invalid.")
+			return
+		}
+		sumReqs = append(sumReqs, cr)
+	}
+
+	vr, err := s.v2v4.Verify(r, s.vhost)
+	if err != nil {
+		log.WarnContext(ctx, "failed to verify request", "error", err)
+		awsigErrorToHTTPError(ctx, log, w, err)
+		return
+	}
+	log = log.With("Access Key ID", vr.AuthData().accessKeyID)
+
+	rd, err := vr.Reader(sumReqs...)
 	if err != nil {
 		log.WarnContext(ctx, "failed to get verified reader", "error", err)
 		awsigErrorToHTTPError(ctx, log, w, err)
