@@ -370,6 +370,33 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var sumReqs []awsig.ChecksumRequest
+	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
+		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
+		if err != nil {
+			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0])
+			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidDigest", "The Content-MD5 you specified was invalid.")
+			return
+		}
+		sumReqs = append(sumReqs, cr)
+	}
+	if strings.EqualFold(r.Header.Get("x-amz-sdk-checksum-algorithm"), "crc32") {
+		if _, ok := r.Header[http.CanonicalHeaderKey("x-amz-checksum-crc32")]; !ok {
+			log.WarnContext(ctx, "x-amz-checksum-crc32 header not found")
+			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidRequest", "x-amz-sdk-checksum-algorithm specified, but no corresponding x-amz-checksum-* or x-amz-trailer headers were found.")
+			return
+		}
+	}
+	if v, ok := r.Header[http.CanonicalHeaderKey("x-amz-checksum-crc32")]; ok {
+		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmCRC32, v[0])
+		if err != nil {
+			log.WarnContext(ctx, "invalid x-amz-checksum-crc32 header", "value", v[0])
+			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidRequest", "Value for x-amz-checksum-crc32 header is invalid.")
+			return
+		}
+		sumReqs = append(sumReqs, cr)
+	}
+
 	rawContentLength, ok := r.Header[http.CanonicalHeaderKey("content-length")]
 	if !ok {
 		log.WarnContext(ctx, "missing Content-Length header")
@@ -381,21 +408,6 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		log.WarnContext(ctx, "invalid Content-Length header", "value", rawContentLength[0])
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "The specified argument was not valid.")
 		return
-	}
-
-	var sumReqs []awsig.ChecksumRequest
-	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
-		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
-		if err != nil {
-			// TODO(amwolff): NewChecksumRequest should return
-			// awsig.InvalidDigest without the caller having to presume
-			// that the underlying error maps to the InvalidDigest error
-			// code.
-			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0])
-			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidDigest", "The Content-MD5 you specified was invalid.")
-			return
-		}
-		sumReqs = append(sumReqs, cr)
 	}
 
 	vr, err := s.v2v4.Verify(r, s.vhost)
@@ -413,7 +425,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := io.ReadAll(rd)
+	b, err := io.ReadAll(io.LimitReader(rd, contentLength))
 	if err != nil {
 		log.WarnContext(ctx, "failed to read object data", "error", err)
 		awsigErrorToHTTPError(ctx, log, w, err)
