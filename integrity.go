@@ -15,6 +15,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // ChecksumAlgorithm represents different checksum algorithms supported
@@ -146,6 +147,45 @@ func (i expectedIntegrity) setEncodedString(a ChecksumAlgorithm, value string) e
 	return nil
 }
 
+// ChecksumMismatch contains information about a mismatch between a computed checksum and client-provided checksum.
+type ChecksumMismatch struct {
+	Algorithm          ChecksumAlgorithm
+	ClientChecksum     []byte
+	CalculatedChecksum []byte
+
+	// IsContentSHA256 indicates whether the expected checksum was specified in the X-Amz-Content-Sha256 header.
+	// This can only be true if ChecksumAlgorithm is AlgorithmSHA256.
+	IsContentSHA256 bool
+}
+
+// ChecksumMismatchError is the error used when a set of computed checksums don't match those provided by the client.
+type ChecksumMismatchError struct {
+	Mismatches []ChecksumMismatch
+}
+
+// Error implements the error interface.
+func (err ChecksumMismatchError) Error() string {
+	var sb strings.Builder
+	sb.WriteString("The provided checksums do not match those that were computed (")
+	for i, mismatch := range err.Mismatches {
+		sb.WriteString("algorithm: ")
+		sb.WriteString(mismatch.Algorithm.String())
+		sb.WriteString(", client checksum")
+		if mismatch.IsContentSHA256 {
+			sb.WriteString(" (from X-Amz-Content-Sha256)")
+		}
+		sb.WriteString(": ")
+		sb.WriteString(hex.EncodeToString(mismatch.ClientChecksum))
+		sb.WriteString(", calculated checksum: ")
+		sb.WriteString(hex.EncodeToString(mismatch.CalculatedChecksum))
+		if i != len(err.Mismatches)-1 {
+			sb.WriteString("; ")
+		}
+	}
+	sb.WriteByte(')')
+	return sb.String()
+}
+
 type integrityReader struct {
 	r io.Reader
 
@@ -180,6 +220,8 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			errs = errors.Join(errs, fmt.Errorf("calculation of %s was not requested", algo))
 		}
 	}
+
+	var mismatchErr ChecksumMismatchError
 	for algo, h := range r.hashes {
 		sum := h.Sum(nil)
 
@@ -188,8 +230,21 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 		}
 
 		if expected, ok := integrity[algo]; ok && !bytes.Equal(expected, sum) {
-			errs = errors.Join(errs, fmt.Errorf("%s do not match: expected %x, got %x", algo, expected, sum))
+			mismatch := ChecksumMismatch{
+				Algorithm:          algo,
+				ClientChecksum:     expected,
+				CalculatedChecksum: sum,
+			}
+			if algo == algorithmHashedPayload {
+				mismatch.Algorithm = AlgorithmSHA256
+				mismatch.IsContentSHA256 = true
+			}
+			mismatchErr.Mismatches = append(mismatchErr.Mismatches, mismatch)
 		}
+	}
+
+	if len(mismatchErr.Mismatches) > 0 {
+		errs = errors.Join(errs, mismatchErr)
 	}
 
 	return errs
