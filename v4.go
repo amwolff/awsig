@@ -583,16 +583,38 @@ func NewV4[T any](provider CredentialsProvider[T], config V4Config) *V4[T] {
 	}
 }
 
-func (v4 *V4[T]) parseTime(main, alt string) (string, time.Time, error) {
-	parsed, err := parseTimeWithFormats(main, []string{timeFormatISO8601})
-	if err != nil {
-		parsed, err = parseTimeWithFormats(alt, httpTimeFormats)
+func (v4 *V4[T]) parseTime(headers http.Header) (string, time.Time, error) {
+	if v := headers.Values(headerXAmzDate); len(v) > 0 {
+		if v[0] == "" {
+			return "", time.Time{}, ErrInvalidDateHeader
+		}
+
+		main := v[0]
+
+		parsed, err := parseTimeWithFormats(main, []string{timeFormatISO8601})
 		if err != nil {
-			return "", time.Time{}, err
+			return "", time.Time{}, nestError(
+				ErrInvalidDateHeader,
+				"parsing time with formats failed: %w", err,
+			)
+		}
+		return main, parsed, nil
+	}
+	if v := headers.Values(headerDate); len(v) > 0 {
+		if v[0] == "" {
+			return "", time.Time{}, ErrInvalidDateHeader // no date header at all
+		}
+
+		parsed, err := parseTimeWithFormats(v[0], httpTimeFormats)
+		if err != nil {
+			return "", time.Time{}, nestError(
+				ErrInvalidDateHeader,
+				"parsing time with formats failed: %w", err,
+			)
 		}
 		return parsed.Format(timeFormatISO8601), parsed, nil
 	}
-	return main, parsed, nil
+	return "", time.Time{}, ErrInvalidDateHeader // no date header at all
 }
 
 func (v4 *V4[T]) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) {
@@ -1111,11 +1133,14 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 }
 
 func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
-	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
+	rawDate, parsedDateTime, err := v4.parseTime(r.Header)
 	if err != nil {
-		return v4VerifiedData[T]{}, ErrInvalidDateHeader
+		return v4VerifiedData[T]{}, err
 	}
 
+	if parsedDateTime.Unix() < 0 {
+		return v4VerifiedData[T]{}, ErrInvalidDateHeader
+	}
 	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
 		return v4VerifiedData[T]{}, ErrRequestTimeTooSkewed
 	}
@@ -1187,9 +1212,9 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, ErrInvalidPresignedDate
 	}
 
-	if v4.now().Before(parsedDateTime) {
+	if now := v4.now(); now.Before(parsedDateTime) {
 		return v4VerifiedData[T]{}, ErrRequestNotYetValid
-	} else if v4.now().After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
+	} else if now.After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
 		return v4VerifiedData[T]{}, ErrRequestExpired
 	}
 
