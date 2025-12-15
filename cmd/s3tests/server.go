@@ -122,6 +122,8 @@ type service struct {
 
 	vhost string
 
+	// TODO(amwolff): it would be worth fixing thread safety; but for
+	// Python-based ceph/s3-tests it's not needed.
 	data map[string]bucket
 }
 
@@ -238,7 +240,7 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 	rawMaxKeys := query.Get("max-keys")
 	maxKeys, err := strconv.Atoi(rawMaxKeys)
 	if err != nil {
-		log.WarnContext(ctx, "invalid max-keys parameter", "value", rawMaxKeys)
+		log.WarnContext(ctx, "invalid max-keys parameter", "value", rawMaxKeys, "error", err)
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "Provided max-keys not an integer or within integer range")
 		return
 	}
@@ -355,7 +357,7 @@ func (s *service) createBucket(w http.ResponseWriter, r *http.Request) {
 		created: time.Now(),
 	}
 
-	log.InfoContext(ctx, "created bucket", "name", bckt)
+	log.InfoContext(ctx, "created bucket")
 }
 
 func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +376,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 	if v, ok := r.Header[http.CanonicalHeaderKey("content-md5")]; ok {
 		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmMD5, v[0])
 		if err != nil {
-			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0])
+			log.WarnContext(ctx, "invalid Content-MD5 header", "value", v[0], "error", err)
 			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidDigest", "The Content-MD5 you specified was invalid.")
 			return
 		}
@@ -390,24 +392,11 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 	if v, ok := r.Header[http.CanonicalHeaderKey("x-amz-checksum-crc32")]; ok {
 		cr, err := awsig.NewChecksumRequest(awsig.AlgorithmCRC32, v[0])
 		if err != nil {
-			log.WarnContext(ctx, "invalid x-amz-checksum-crc32 header", "value", v[0])
+			log.WarnContext(ctx, "invalid x-amz-checksum-crc32 header", "value", v[0], "error", err)
 			xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidRequest", "Value for x-amz-checksum-crc32 header is invalid.")
 			return
 		}
 		sumReqs = append(sumReqs, cr)
-	}
-
-	rawContentLength, ok := r.Header[http.CanonicalHeaderKey("content-length")]
-	if !ok {
-		log.WarnContext(ctx, "missing Content-Length header")
-		xmlHTTPError(ctx, log, w, http.StatusLengthRequired, "MissingContentLength", "You must provide the Content-Length HTTP header.")
-		return
-	}
-	contentLength, err := strconv.ParseInt(rawContentLength[0], 10, 64)
-	if err != nil || contentLength < 0 {
-		log.WarnContext(ctx, "invalid Content-Length header", "value", rawContentLength[0])
-		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "The specified argument was not valid.")
-		return
 	}
 
 	vr, err := s.v2v4.Verify(r, s.vhost)
@@ -425,7 +414,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b, err := io.ReadAll(io.LimitReader(rd, contentLength))
+	b, err := io.ReadAll(rd)
 	if err != nil {
 		log.WarnContext(ctx, "failed to read object data", "error", err)
 		awsigErrorToHTTPError(ctx, log, w, err)
@@ -441,7 +430,7 @@ func (s *service) createObject(w http.ResponseWriter, r *http.Request) {
 	})
 	s.data[bckt] = bucket
 
-	log.InfoContext(ctx, "stored object", "name", name, "size", len(b), "bucket", bckt)
+	log.InfoContext(ctx, "stored object", "size", len(b))
 }
 
 func (s *service) deleteObjects(w http.ResponseWriter, r *http.Request) {
@@ -573,6 +562,7 @@ func writeXML(ctx context.Context, log *slog.Logger, w http.ResponseWriter, v an
 func xmlHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, statusCode int, code, message string) {
 	h := w.Header()
 	h.Del("Content-Length")
+	h.Set("Connection", "close")
 	h.Set("Content-Type", "application/xml; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)
@@ -607,22 +597,12 @@ func xmlHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, 
 
 func awsigErrorToHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, awsig.ErrAuthorizationHeaderMalformed):
-		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "AuthorizationHeaderMalformed", "The authorization header that you provided is not valid.")
 	case errors.Is(err, awsig.ErrBadDigest):
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "BadDigest", "The Content-MD5 or checksum value that you specified did not match what the server received.")
-	case errors.Is(err, awsig.ErrInvalidAccessKeyID):
-		xmlHTTPError(ctx, log, w, http.StatusForbidden, "InvalidAccessKeyId", "The AWS access key ID that you provided does not exist in our records.")
-	case errors.Is(err, awsig.ErrInvalidArgument):
-		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidArgument", "Bad Request")
-	case errors.Is(err, awsig.ErrInvalidRequest):
-		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidRequest", "Bad Request")
-	case errors.Is(err, awsig.ErrMissingAuthenticationToken):
-		xmlHTTPError(ctx, log, w, http.StatusForbidden, "MissingAuthenticationToken", "The request was not signed.")
+	case errors.Is(err, awsig.ErrInvalidDateHeader):
+		xmlHTTPError(ctx, log, w, http.StatusForbidden, "AccessDenied", "AWS authentication requires a valid Date or x-amz-date header")
 	case errors.Is(err, awsig.ErrRequestTimeTooSkewed):
 		xmlHTTPError(ctx, log, w, http.StatusForbidden, "RequestTimeTooSkewed", "The difference between the request time and the server's time is too large.")
-	case errors.Is(err, awsig.ErrSignatureDoesNotMatch):
-		xmlHTTPError(ctx, log, w, http.StatusForbidden, "SignatureDoesNotMatch", "The request signature that the server calculated does not match the signature that you provided. Check your AWS secret access key and signing method. For more information, see REST Authentication and SOAP Authentication.")
 	default:
 		xmlHTTPError(ctx, log, w, http.StatusInternalServerError, "InternalError", "An internal error occurred. Try again.")
 	}
