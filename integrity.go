@@ -237,7 +237,26 @@ func newIntegrityReader(r io.Reader, algorithms []ChecksumAlgorithm) *integrityR
 	return ir
 }
 
+func testChecksumLen(a ChecksumAlgorithm, v []byte) error {
+	var want, got int
+
+	switch a {
+	case algorithmHashedPayload:
+		want, got = hex.EncodedLen(sha256.Size), len(v)
+	default:
+		want, got = a.base64Length(), len(v)
+	}
+
+	if want != got {
+		return fmt.Errorf("invalid length for %s: expected %d, got %d", a, want, got)
+	}
+	return nil
+}
+
 func decodeChecksum(a ChecksumAlgorithm, v []byte) ([]byte, error) {
+	if err := testChecksumLen(a, v); err != nil {
+		return nil, err
+	}
 	switch a {
 	case algorithmHashedPayload:
 		dst := make([]byte, hex.DecodedLen(len(v)))
@@ -251,6 +270,9 @@ func decodeChecksum(a ChecksumAlgorithm, v []byte) ([]byte, error) {
 }
 
 func decodeChecksumString(a ChecksumAlgorithm, v string) ([]byte, error) {
+	if err := testChecksumLen(a, []byte(v)); err != nil {
+		return nil, err
+	}
 	switch a {
 	case algorithmHashedPayload:
 		return hex.DecodeString(v)
