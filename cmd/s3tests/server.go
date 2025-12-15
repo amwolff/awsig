@@ -216,6 +216,11 @@ func (s *service) listObjectVersions(w http.ResponseWriter, r *http.Request) {
 
 	log := s.log.With("action", "ListObjectVersions", "bucket", bckt, "headers", r.Header, "query", query)
 
+	if len(query) < 1 || len(query) > 3 || !query.Has("versions") {
+		xmlHTTPErrorNotImplemented(ctx, log, w)
+		return
+	}
+
 	// not supported: delimiter
 	// supported: encoding-type
 	// not supported: key-marker
