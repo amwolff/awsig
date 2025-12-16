@@ -28,3 +28,35 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Run tests
         run: go test -race ./...
+  s3-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: test
+        run: ls -al
+      - name: Checkout awsig
+        uses: actions/checkout@v5
+        with:
+          path: awsig
+      - name: Checkout s3-tests
+        uses: actions/checkout@v5
+        with:
+          repository: amwolff/s3-tests
+          ref: mark-failing-auth-tests-fails_on_aws
+          path: s3-tests
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: awsig/go.sum
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+      - name: Install tox
+        run: sudo apt update && sudo apt install tox
+      - name: Run s3-tests
+        run: |
+          go run -C awsig/cmd/s3tests/ . &
+          trap "kill $!" EXIT
+          S3TEST_CONF=s3tests.conf.SAMPLE tox -c s3-tests/ -- -m '(auth_aws2 or auth_aws4 or auth_common) and not fails_on_aws' \
+            --deselect=s3tests/functional/test_headers.py::test_bucket_create_bad_expect_mismatch \
+            --deselect=s3tests/functional/test_headers.py::test_object_create_bad_expect_mismatch \
+            --deselect=s3tests/functional/test_headers.py::test_bucket_put_bad_canned_acl
