@@ -31,8 +31,8 @@ var (
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 	// ErrInvalidArgument indicates the InvalidArgument error code.
 	ErrInvalidArgument = errors.New("invalid argument")
-	// ErrInvalidDateHeader indicates that the X-Amz-Date or Date header is malformed.
-	ErrInvalidDateHeader = errors.New("the x-amz-date or date header does not contain a valid date")
+	// ErrInvalidDateHeader indicates that the Date or X-Amz-Date header is not valid.
+	ErrInvalidDateHeader = errors.New("AWS authentication requires a valid Date or x-amz-date header")
 	// ErrInvalidDigest indicates the InvalidDigest error code.
 	ErrInvalidDigest = errors.New("the Content-MD5 or checksum value that you specified is not valid")
 	// ErrInvalidPOSTDate indicates that the X-Amz-Date form field is malformed.

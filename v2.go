@@ -148,12 +148,38 @@ func NewV2[T any](provider CredentialsProvider[T]) *V2[T] {
 	}
 }
 
-func (v2 *V2[T]) parseTime(main, alt string) (time.Time, error) {
-	parsed, err := parseTimeWithFormats(main, httpTimeFormats)
-	if err != nil {
-		return parseTimeWithFormats(alt, httpTimeFormats)
+func (v2 *V2[T]) parseTime(headers http.Header) (string, time.Time, error) {
+	var alt string
+
+	if v := headers.Values(headerDate); len(v) > 0 {
+		alt = v[0]
 	}
-	return parsed, nil
+
+	if v := headers.Values(headerXAmzDate); len(v) > 0 {
+		if v[0] == "" {
+			return "", time.Time{}, ErrInvalidDateHeader
+		}
+
+		parsed, err := parseTimeWithFormats(v[0], httpTimeFormats)
+		if err != nil {
+			return "", time.Time{}, nestError(
+				ErrInvalidDateHeader,
+				"parsing time with formats failed: %w", err,
+			)
+		}
+		return alt, parsed, nil
+	}
+	if alt != "" {
+		parsed, err := parseTimeWithFormats(alt, httpTimeFormats)
+		if err != nil {
+			return "", time.Time{}, nestError(
+				ErrInvalidDateHeader,
+				"parsing time with formats failed: %w", err,
+			)
+		}
+		return alt, parsed, nil
+	}
+	return "", time.Time{}, ErrInvalidDateHeader // no date header at all
 }
 
 type v2ParsedAuthorization struct {
@@ -333,12 +359,14 @@ func (v2 *V2[T]) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData[
 }
 
 func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2VerifiedData[T], error) {
-	headerDateValue := r.Header.Get(headerDate)
-	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), headerDateValue)
+	headerDateValue, parsedDateTime, err := v2.parseTime(r.Header)
 	if err != nil {
-		return v2VerifiedData[T]{}, ErrInvalidDateHeader
+		return v2VerifiedData[T]{}, err
 	}
 
+	if parsedDateTime.Unix() < 0 {
+		return v2VerifiedData[T]{}, ErrInvalidDateHeader
+	}
 	if timeSkewExceeded(v2.now, parsedDateTime, maxRequestTimeSkew) {
 		return v2VerifiedData[T]{}, ErrRequestTimeTooSkewed
 	}
