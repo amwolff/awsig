@@ -175,7 +175,7 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 28, 1, 49, 49))
 
-		vr, err := v2.Verify(req, "")
+		vr, err := v2.Verify(req, "dictionary")
 		assert.NoError(t, err)
 		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
@@ -201,7 +201,7 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 
 		v2 := newV2(provider2, dummyNow(2006, time.March, 9, 7, 25, 20))
 
-		vr, err := v2.Verify(req, "")
+		vr, err := v2.Verify(req, "quotes")
 		assert.NoError(t, err)
 		assert.Equal(t, accessKeyID2, vr.AuthData().accessKeyID)
 
@@ -236,7 +236,7 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 
 		v2 := newV2(provider2, dummyNow(2007, time.March, 26, 19, 37, 58))
 
-		_, err := v2.Verify(req, "")
+		_, err := v2.Verify(req, "quotes")
 		assert.Error(t, err)
 	})
 	t.Run("expired presigned 2", func(t *testing.T) {

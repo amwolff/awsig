@@ -59,7 +59,7 @@ v2v4 := awsig.NewV2V4(NewMyCredentialsProvider(), awsig.V4Config{
 
 func …(w http.ResponseWriter, r *http.Request) {
 	// (3) Verify the incoming request:
-	vr, err := v2v4.Verify(r, "virtual-hosted-bucket-indication-for-v2")
+	vr, err := v2v4.Verify(r, "bucket-indication-for-v2")
 	if err != nil {
 		…
 	}

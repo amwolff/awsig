@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"net/url"
 )
 
 const (
@@ -39,4 +40,9 @@ func hmacSHA1(key []byte, s string) []byte {
 
 func calculateSignatureV2(stringToSign string, secretAccessKey string) signatureV2 {
 	return hmacSHA1([]byte(secretAccessKey), stringToSign)
+}
+
+func equalUnescaped(escaped, unescaped string) bool {
+	unescaped2, err := url.PathUnescape(escaped)
+	return err == nil && unescaped2 == unescaped
 }
