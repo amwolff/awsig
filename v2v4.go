@@ -24,7 +24,7 @@ func NewV2V4[T any](provider CredentialsProvider[T], v4Config V4Config) *V2V4[T]
 // Verify automatically detects and verifies either AWS Signature
 // Version 2 or AWS Signature Version 4 for the given request and
 // returns a verified request.
-func (v2v4 *V2V4[T]) Verify(r *http.Request, virtualHostedBucket string) (VerifiedRequest[T], error) {
+func (v2v4 *V2V4[T]) Verify(r *http.Request, bucket string) (VerifiedRequest[T], error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""
@@ -56,7 +56,7 @@ func (v2v4 *V2V4[T]) Verify(r *http.Request, virtualHostedBucket string) (Verifi
 			}
 			return newV4VerifiedRequest(r.Body, data)
 		}
-		data, err := v2v4.v2.verify(r, virtualHostedBucket)
+		data, err := v2v4.v2.verify(r, bucket)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +68,7 @@ func (v2v4 *V2V4[T]) Verify(r *http.Request, virtualHostedBucket string) (Verifi
 		}
 		return newV4VerifiedRequest(r.Body, data)
 	} else if query.Has(queryAWSAccessKeyId) {
-		data, err := v2v4.v2.verifyPresigned(r, query, virtualHostedBucket)
+		data, err := v2v4.v2.verifyPresigned(r, query, bucket)
 		if err != nil {
 			return nil, err
 		}

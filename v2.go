@@ -225,7 +225,7 @@ func (v2 *V2[T]) parseAuthorization(rawAuthorization string) (v2ParsedAuthorizat
 	}, nil
 }
 
-func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedBucket, key string) signatureV2 {
+func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, bucket, key string) signatureV2 {
 	b := newHashBuilder(func() hash.Hash { return hmac.New(sha1.New, []byte(key)) })
 
 	b.WriteString(r.Method)
@@ -256,14 +256,27 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 		b.WriteByte(lf)
 	}
 
-	if virtualHostedBucket != "" {
-		b.WriteByte('/')
-		b.WriteString(virtualHostedBucket)
+	b.WriteByte('/')
+	if bucket != "" {
+		escapedPath := r.URL.EscapedPath()
+		trimmedEscapedPath := strings.TrimPrefix(escapedPath, "/")
+
+		idx1 := strings.IndexByte(trimmedEscapedPath, '/')
+		idx2 := strings.Index(trimmedEscapedPath, "%2F")
+
+		idx := max(idx1, idx2)
+
+		if idx1 >= 0 && idx2 >= 0 {
+			idx = min(idx1, idx2)
+		}
+
+		b.WriteString(bucket)
+		if idx >= 0 && equalUnescaped(trimmedEscapedPath[:idx], bucket) {
+			b.WriteString(trimmedEscapedPath[idx:])
+		} else {
+			b.WriteString(escapedPath)
+		}
 	}
-	// NOTE(amwolff): it felt like a bad idea to use a RawPath that
-	// might contain an invalid encoding the software down the chain
-	// might use long after we've authenticated this request.
-	b.WriteString(r.URL.EscapedPath())
 
 	if query := r.URL.Query(); len(query) > 0 {
 		included := map[string]bool{
@@ -358,7 +371,7 @@ func (v2 *V2[T]) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData[
 	}, nil
 }
 
-func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2VerifiedData[T], error) {
+func (v2 *V2[T]) verify(r *http.Request, bucket string) (v2VerifiedData[T], error) {
 	headerDateValue, parsedDateTime, err := v2.parseTime(r.Header)
 	if err != nil {
 		return v2VerifiedData[T]{}, err
@@ -381,7 +394,7 @@ func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2Verified
 		return v2VerifiedData[T]{}, err
 	}
 
-	signature := v2.calculateSignature(r, headerDateValue, virtualHostedBucket, secretAccessKey)
+	signature := v2.calculateSignature(r, headerDateValue, bucket, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
 		return v2VerifiedData[T]{}, ErrSignatureDoesNotMatch
@@ -392,7 +405,7 @@ func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2Verified
 	}, nil
 }
 
-func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) (v2VerifiedData[T], error) {
+func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, bucket string) (v2VerifiedData[T], error) {
 	rawExpires := query.Get(queryExpires)
 
 	expires, err := strconv.ParseInt(rawExpires, 10, 64)
@@ -418,7 +431,7 @@ func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHoste
 		return v2VerifiedData[T]{}, err
 	}
 
-	if !v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
+	if !v2.calculateSignature(r, rawExpires, bucket, secretAccessKey).compare(signature) {
 		return v2VerifiedData[T]{}, ErrSignatureDoesNotMatch
 	}
 
@@ -429,7 +442,7 @@ func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHoste
 
 // Verify verifies the AWS Signature Version 2 for the given request and
 // returns a verified request.
-func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRequest[T], error) {
+func (v2 *V2[T]) Verify(r *http.Request, bucket string) (*V2VerifiedRequest[T], error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""
@@ -446,13 +459,13 @@ func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2Verifie
 		}
 		return newV2VerifiedRequestWithForm(file, data, form)
 	} else if r.Header.Get(headerAuthorization) != "" {
-		data, err := v2.verify(r, virtualHostedBucket)
+		data, err := v2.verify(r, bucket)
 		if err != nil {
 			return nil, err
 		}
 		return newV2VerifiedRequest(r.Body, data)
 	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
-		data, err := v2.verifyPresigned(r, query, virtualHostedBucket)
+		data, err := v2.verifyPresigned(r, query, bucket)
 		if err != nil {
 			return nil, err
 		}

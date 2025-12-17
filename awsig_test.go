@@ -51,7 +51,7 @@ func Example() {
 
 	h := func(w http.ResponseWriter, r *http.Request) {
 		// (3) Verify the incoming request:
-		vr, err := v2v4.Verify(r, "virtual-hosted-bucket-indication-for-v2")
+		vr, err := v2v4.Verify(r, "bucket-indication-for-v2")
 		if err != nil {
 			errToHTTPError(w, err)
 			return

@@ -315,7 +315,7 @@ type exampleAuthData struct {
 }
 
 type verifier[T VerifiedRequest[exampleAuthData]] interface {
-	Verify(r *http.Request, virtualHostedBucket string) (T, error)
+	Verify(r *http.Request, bucket string) (T, error)
 }
 
 type simpleCredentialsProvider struct {
