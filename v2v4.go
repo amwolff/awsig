@@ -75,5 +75,5 @@ func (v2v4 *V2V4[T]) Verify(r *http.Request, virtualHostedBucket string) (Verifi
 		return newV2VerifiedRequest(r.Body, data)
 	}
 
-	return nil, ErrMissingAuthenticationToken
+	return nil, ErrAccessDenied
 }

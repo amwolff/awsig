@@ -92,7 +92,7 @@ func (r *v4Reader) consumeLF(buf []byte) error {
 	}
 
 	if buf[0] != lf {
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	return nil
@@ -109,7 +109,7 @@ func (r *v4Reader) consumeCRLF(buf []byte) error {
 	}
 
 	if buf[0] != cr || buf[1] != lf {
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	return nil
@@ -135,7 +135,7 @@ Loop:
 		switch buf[0] {
 		case cr:
 			if !r.unsigned {
-				return 0, ErrIncompleteBody
+				return 0, ErrInvalidRequest
 			}
 
 			if err = r.consumeLF(buf); err != nil {
@@ -146,7 +146,7 @@ Loop:
 			break Loop
 		case ';':
 			if r.unsigned {
-				return 0, ErrIncompleteBody
+				return 0, ErrInvalidRequest
 			}
 
 			separatorFound = true
@@ -157,12 +157,12 @@ Loop:
 	}
 
 	if !separatorFound {
-		return 0, ErrIncompleteBody
+		return 0, ErrInvalidRequest
 	}
 
 	length, err := strconv.ParseInt(string(rawLength), 16, 64)
 	if err != nil {
-		return 0, ErrIncompleteBody
+		return 0, ErrInvalidRequest
 	}
 
 	return length, nil
@@ -233,7 +233,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 	}
 
 	if !bytes.HasPrefix(buf, []byte(name)) {
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	if err = r.integrity.setEncoded(r.trailingSumAlgo, buf[len(name):len(buf)-1]); err != nil {
@@ -260,7 +260,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 			return err
 		}
 	default:
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	if !r.unsigned {
@@ -291,7 +291,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 
 func (r *v4Reader) close(buf []byte) error {
 	if r.decodedContentLength != 0 {
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	if !r.unsigned {
@@ -312,7 +312,7 @@ func (r *v4Reader) close(buf []byte) error {
 	}
 
 	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
-		return ErrIncompleteBody
+		return ErrInvalidRequest
 	}
 
 	if err := r.ir.verify(r.integrity); err != nil {
@@ -386,7 +386,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	if r.decodedContentLength -= int64(n); r.decodedContentLength < 0 {
-		return n, ErrIncompleteBody
+		return n, ErrInvalidRequest
 	}
 
 	if errors.Is(err, io.EOF) {
@@ -1292,5 +1292,5 @@ func (v4 *V4[T]) Verify(r *http.Request) (*V4VerifiedRequest[T], error) {
 		return newV4VerifiedRequest(r.Body, data)
 	}
 
-	return nil, ErrMissingAuthenticationToken
+	return nil, ErrAccessDenied
 }

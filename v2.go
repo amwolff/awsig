@@ -458,5 +458,5 @@ func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2Verifie
 		}
 		return newV2VerifiedRequest(r.Body, data)
 	}
-	return nil, ErrMissingAuthenticationToken
+	return nil, ErrAccessDenied
 }

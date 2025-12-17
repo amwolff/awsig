@@ -15,6 +15,8 @@ import (
 )
 
 var (
+	// ErrAccessDenied indicates the AccessDenied error code.
+	ErrAccessDenied = errors.New("access denied")
 	// ErrAuthorizationHeaderMalformed indicates the AuthorizationHeaderMalformed error code.
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
 	// ErrBadDigest indicates the BadDigest error code.
@@ -25,8 +27,6 @@ var (
 	ErrEntityTooLarge = errors.New("your proposed upload exceeds the maximum allowed object size")
 	// ErrEntityTooSmall indicates the EntityTooSmall error code.
 	ErrEntityTooSmall = errors.New("your proposed upload is smaller than the minimum allowed object size")
-	// ErrIncompleteBody indicates the IncompleteBody error code.
-	ErrIncompleteBody = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
 	// ErrInvalidAccessKeyID indicates the InvalidAccessKeyID error code.
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 	// ErrInvalidArgument indicates the InvalidArgument error code.
@@ -54,8 +54,6 @@ var (
 	ErrInvalidXAmzDecodedContentSHA256 = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
 	// ErrMalformedPOSTRequest indicates that a POST request is malformed.
 	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
-	// ErrMissingAuthenticationToken indicates the MissingAuthenticationToken error code.
-	ErrMissingAuthenticationToken = errors.New("the request was not signed")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
 	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
 	// ErrMissingPOSTPolicy indicates that the POST policy was not provided.

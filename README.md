@@ -15,7 +15,7 @@ well.
 
 ### TODO
 
-- [ ] verify the returned errors (error codes) with the real AWS (preferably S3) or a close clone, like Ceph
+- [x] verify the returned errors (error codes) with the real AWS (preferably S3) or a close clone, like Ceph
 - [ ] do shallow test runs with all publicly available AWS SDKs
     - [ ] SDKs act differently with and without TLS and with different checksum options
 
