@@ -264,6 +264,14 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 	// might contain an invalid encoding the software down the chain
 	// might use long after we've authenticated this request.
 	b.WriteString(r.URL.EscapedPath())
+	if virtualHostedBucket == "" {
+		r := strings.TrimPrefix(r.URL.Path, "/")
+		if r != "" && strings.IndexByte(r, '/') < 0 {
+			// For some reason, they sometimes sign requests that
+			// contain just the bucket name with a trailing slash.
+			b.WriteByte('/')
+		}
+	}
 
 	if query := r.URL.Query(); len(query) > 0 {
 		included := map[string]bool{
