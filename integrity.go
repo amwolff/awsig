@@ -232,8 +232,8 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 		if expected, ok := integrity[algo]; ok && !bytes.Equal(expected, sum) {
 			mismatch := ChecksumMismatch{
 				Algorithm:          algo,
-				ClientChecksum:     expected,
-				CalculatedChecksum: sum,
+				ClientChecksum:     slices.Clone(expected),
+				CalculatedChecksum: slices.Clone(sum),
 			}
 			if algo == algorithmHashedPayload {
 				mismatch.Algorithm = AlgorithmSHA256
