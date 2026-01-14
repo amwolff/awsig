@@ -925,7 +925,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 	te := headers.Get(headerTransferEncoding)
 	if cl != "" && (te != "" && te != "identity") {
 		return 0, ErrContentLengthWithTransferEncoding
-	} else if cl == "" && te == "" {
+	} else if cl == "" && te == "identity" {
 		return 0, nestError(
 			ErrMissingContentLength,
 			"the %s header is missing", headerContentLength,
