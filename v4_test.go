@@ -426,4 +426,26 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		_, err := v4.Verify(req)
 		assert.NoError(t, err)
 	})
+
+	t.Run("issue 12", func(t *testing.T) {
+		v4 := newV4(provider, dummyNow(2026, time.January, 15, 11, 14, 48))
+
+		req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/s3t/test.sh", nil)
+		req.Header.Add("Content-Encoding", "aws-chunked")
+		req.Header.Add("X-Amz-Content-SHA256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+		req.Header.Add("Content-Type", "application/x-sh")
+		req.Header.Add("Expect", "100-continue")
+		req.Header.Add("X-Amz-Trailer", "x-amz-checksum-crc64nvme")
+		req.Header.Add("X-Amz-Decoded-Content-Length", "512")
+		req.Header.Add("X-Amz-Date", "20260115T111448Z")
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20260115/us-east-1/s3/aws4_request, SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-sdk-checksum-algorithm;x-amz-trailer, Signature=caee208f75f4b22abf5f3103819876c1394cd3a8ca960a62424f145f1cc82565")
+		req.Header.Add("Accept-Encoding", "identity")
+		req.Header.Add("x-amz-sdk-checksum-algorithm", "CRC64NVME")
+		req.Header.Add("User-Agent", "aws-cli/2.33.0 md/awscrt#0.29.1 ua/2.1 os/linux#6.1.0-34-amd64 md/arch#x86_64 lang/python#3.13.11 md/pyimpl#CPython m/b,Z,G,W,E,N cfg/retry-mode#standard md/installer#exe md/distrib#ubuntu.24 md/prompt#off md/command#s3.cp")
+
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
+	})
 }
