@@ -31,8 +31,6 @@ jobs:
   s3-tests:
     runs-on: ubuntu-latest
     steps:
-      - name: test
-        run: ls -al
       - name: Checkout awsig
         uses: actions/checkout@v5
         with:
