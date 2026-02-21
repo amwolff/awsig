@@ -345,10 +345,7 @@ func (v2 *V2[T]) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData[
 
 	policy := form.Get(formNamePolicy).Value
 	if policy == "" {
-		return v2VerifiedData[T]{}, nestError(
-			ErrInvalidRequest,
-			"the %s form field is missing", formNamePolicy,
-		)
+		return v2VerifiedData[T]{}, ErrMissingPOSTPolicy
 	}
 
 	accessKeyID := form.Get(queryAWSAccessKeyId).Value
