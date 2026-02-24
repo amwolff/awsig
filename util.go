@@ -56,6 +56,8 @@ var (
 	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
 	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
+	// ErrMissingPOSTFile indicates that a POST request is missing a required file upload.
+	ErrMissingPOSTFile = errors.New("the request is missing a file upload")
 	// ErrMissingPOSTPolicy indicates that the POST policy was not provided.
 	ErrMissingPOSTPolicy = errors.New("the Policy form field is missing")
 	// ErrMissingSecurityHeader indicates the MissingSecurityHeader error code.
@@ -425,5 +427,5 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		}
 	}
 
-	return nil, PostForm{}, errors.New("missing file part in multipart form data")
+	return nil, PostForm{}, ErrMissingPOSTFile
 }
