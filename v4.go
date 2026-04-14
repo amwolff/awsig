@@ -918,7 +918,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 
 	decodedContentLength, err := strconv.ParseInt(rawDecodedContentLength, 10, 64)
 	if err != nil {
-		return 0, ErrInvalidXAmzDecodedContentSHA256
+		return 0, ErrInvalidXAmzDecodedContentLength
 	}
 
 	cl := headers.Get(headerContentLength)

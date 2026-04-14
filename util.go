@@ -50,8 +50,8 @@ var (
 	ErrInvalidSignature = errors.New("the request signature that the server calculated does not match the signature that you provided")
 	// ErrInvalidXAmzContentSHA256 indicates that the X-Amz-Content-Sha256 header has an invalid value.
 	ErrInvalidXAmzContentSHA256 = errors.New("the x-amz-content-sha256 header does not contain a valid value")
-	// ErrInvalidXAmzDecodedContentSHA256 indicates that the X-Amz-Decoded-Content-Length header has an invalid value.
-	ErrInvalidXAmzDecodedContentSHA256 = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
+	// ErrInvalidXAmzDecodedContentLength indicates that the X-Amz-Decoded-Content-Length header has an invalid value.
+	ErrInvalidXAmzDecodedContentLength = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
 	// ErrMalformedPOSTRequest indicates that a POST request is malformed.
 	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
