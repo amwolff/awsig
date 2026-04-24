@@ -23,8 +23,10 @@ import (
 type ChecksumAlgorithm int
 
 const (
+	// AlgorithmNone represents an uninitialized checksum algorithm.
+	AlgorithmNone ChecksumAlgorithm = iota
 	// AlgorithmCRC32 represents the CRC-32 checksum algorithm.
-	AlgorithmCRC32 ChecksumAlgorithm = iota
+	AlgorithmCRC32
 	// AlgorithmCRC32C represents the CRC-32C checksum algorithm.
 	AlgorithmCRC32C
 	// AlgorithmCRC64NVME represents the CRC-64/NVME checksum algorithm.
@@ -61,6 +63,8 @@ func (a ChecksumAlgorithm) valid() bool {
 
 func (a ChecksumAlgorithm) String() string {
 	switch a {
+	case AlgorithmNone:
+		return "none"
 	case AlgorithmCRC32:
 		return "crc32"
 	case AlgorithmCRC32C:
