@@ -25,6 +25,7 @@ const (
 	headerHost                     = "host"
 	headerTransferEncoding         = "transfer-encoding"
 	headerXAmzDecodedContentLength = xAmzHeaderPrefix + "decoded-content-length"
+	headerXAmzTrailer              = xAmzHeaderPrefix + "trailer"
 
 	v4AuthorizationHeaderCredentialPrefix     = "Credential="
 	v4AuthorizationHeaderSignedHeadersPrefix  = "SignedHeaders="
@@ -48,7 +49,7 @@ const (
 
 	chunkMaxLengthEncoded        = "140000000"
 	chunkMaxLength               = 5368709120 // 5 GiB
-	chunkMinLength               = 8000       // 8 KB
+	chunkMinLength               = 8192       // 8 KiB
 	chunkSignaturePrefix         = "chunk-signature="
 	chunkTrailingHeaderPrefix    = "x-amz-checksum-"
 	chunkTrailingSignaturePrefix = "x-amz-trailer-signature:"
@@ -74,6 +75,8 @@ type v4Reader struct {
 	integrity            expectedIntegrity
 	decodedContentLength int64
 
+	metadata               [len(chunkTrailingSignaturePrefix) + signatureV4EncodedLength]byte
+	err                    error
 	chunkCount             int
 	chunkBytesLeft         int64
 	chunkSHA256            hash.Hash
@@ -127,7 +130,7 @@ func (r *v4Reader) readChunkLength(buf []byte) (int64, error) {
 	}
 
 Loop:
-	for i := 0; i < len(chunkMaxLengthEncoded) && !separatorFound; i++ {
+	for i := 0; i <= len(chunkMaxLengthEncoded) && !separatorFound; i++ { // digits + separator
 		if _, err = io.ReadFull(r.r, buf); err != nil {
 			return 0, err
 		}
@@ -160,12 +163,12 @@ Loop:
 		return 0, ErrInvalidRequest
 	}
 
-	length, err := strconv.ParseInt(string(rawLength), 16, 64)
+	length, err := strconv.ParseUint(string(rawLength), 16, 63)
 	if err != nil {
 		return 0, ErrInvalidRequest
 	}
 
-	return length, nil
+	return int64(length), nil
 }
 
 func (r *v4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, error) {
@@ -217,23 +220,32 @@ func (r *v4Reader) currentChunkSignatureData() signatureV4Data {
 	}
 }
 
-func (r *v4Reader) readChunkTrailer(buf []byte) error {
+func (r *v4Reader) readChunkTrailer(buf []byte) (err error) {
+	defer func() {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			err = nestError(ErrMalformedTrailer, "incomplete checksum trailer: %w", io.ErrUnexpectedEOF)
+		}
+	}()
+
 	name := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String() + ":"
 
 	length := len(name)
 	length += r.trailingSumAlgo.base64Length()
 
-	buf, err := reuseBuffer(buf, length+1) // +1 for the trailing LF
+	buf, err = reuseBuffer(buf, length+1) // +1 for the trailing LF
 	if err != nil {
 		return err
 	}
 
-	if _, err = io.ReadFull(r.r, buf); err != nil {
+	if _, err = io.ReadFull(r.r, buf[:len(name)]); err != nil {
 		return err
 	}
 
-	if !bytes.HasPrefix(buf, []byte(name)) {
-		return ErrInvalidRequest
+	if !bytes.EqualFold(buf[:len(name)], []byte(name)) {
+		return nestError(ErrMalformedTrailer, "expected the %s trailer", name[:len(name)-1])
+	}
+	if _, err = io.ReadFull(r.r, buf[len(name):]); err != nil {
+		return err
 	}
 
 	if err = r.integrity.setEncoded(r.trailingSumAlgo, buf[len(name):len(buf)-1]); err != nil {
@@ -260,7 +272,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 			return err
 		}
 	default:
-		return ErrInvalidRequest
+		return nestError(ErrMalformedTrailer, "the trailer is not terminated by a line break")
 	}
 
 	if !r.unsigned {
@@ -311,7 +323,20 @@ func (r *v4Reader) close(buf []byte) error {
 		}
 	}
 
-	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
+	// Unsigned trailers already consume their terminating blank line.
+	if !r.trailingHeader || !r.unsigned {
+		if err := r.consumeCRLF(buf); err != nil {
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			if r.trailingHeader {
+				return nestError(ErrMalformedTrailer, "the trailer is not terminated by a blank line: %w", err)
+			}
+			return err
+		}
+	}
+
+	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) {
 		return ErrInvalidRequest
 	}
 
@@ -323,6 +348,17 @@ func (r *v4Reader) close(buf []byte) error {
 }
 
 func (r *v4Reader) Read(p []byte) (n int, err error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	defer func() {
+		if err != nil {
+			r.err = err
+		}
+	}()
 	if !r.multipleChunks { // fast path for single chunk
 		if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
 			if err := r.ir.verify(r.integrity); err != nil {
@@ -332,9 +368,10 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		return n, err
 	}
 
+	buf := r.metadata[:]
 	if r.chunkBytesLeft == 0 {
 		if r.chunkCount > 0 {
-			if err = r.consumeCRLF(p); err != nil {
+			if err = r.consumeCRLF(buf); err != nil {
 				if errors.Is(err, io.EOF) {
 					return n, io.ErrUnexpectedEOF
 				}
@@ -342,7 +379,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 			}
 		}
 
-		length, signature, err := r.readChunkMeta(p)
+		length, signature, err := r.readChunkMeta(buf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return n, io.ErrUnexpectedEOF
@@ -358,13 +395,13 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		}
 
 		if length == 0 { // completion chunk
-			return n, r.close(p)
+			return n, r.close(buf)
 		}
 		if length > chunkMaxLength {
 			return 0, ErrEntityTooLarge
 		}
 		if length < chunkMinLength && r.decodedContentLength > length {
-			return 0, ErrEntityTooSmall
+			return 0, nestError(ErrInvalidChunkSize, "%w", ErrEntityTooSmall)
 		}
 	}
 
@@ -373,6 +410,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	n, err = r.ir.Read(p)
+	r.decodedContentLength -= int64(n)
 
 	if r.chunkBytesLeft -= int64(n); r.chunkBytesLeft == 0 {
 		r.chunkCount++
@@ -385,7 +423,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	if r.decodedContentLength -= int64(n); r.decodedContentLength < 0 {
+	if r.decodedContentLength < 0 {
 		return n, ErrInvalidRequest
 	}
 
@@ -457,41 +495,40 @@ func (vr *V4VerifiedRequest[T]) AuthData() T {
 	return vr.data.authData
 }
 
-// PostForm implements VerifiedRequest.
+// PostForm implements [VerifiedRequest.PostForm].
 func (vr *V4VerifiedRequest[T]) PostForm() PostForm {
 	return vr.form
-}
-
-func (vr *V4VerifiedRequest[T]) addAlgorithm(algorithm ChecksumAlgorithm) error {
-	if slices.Contains(vr.algorithms, algorithm) {
-		return errors.New("algorithm already added")
-	}
-	vr.algorithms = append(vr.algorithms, algorithm)
-	return nil
 }
 
 func (vr *V4VerifiedRequest[T]) requestChecksum(req ChecksumRequest) error {
 	if !req.valid() {
 		return fmt.Errorf("uninitialized request")
 	}
-	switch req.trailing {
-	case true:
+	if slices.Contains(vr.algorithms, req.algorithm) {
+		// Content-MD5 and X-Amz-Checksum-Md5 may both carry the same digest.
+		if expected, ok := vr.integrity[req.algorithm]; ok && !req.trailing {
+			if !bytes.Equal(expected, req.value) {
+				return nestError(ErrBadDigest, "conflicting %s checksums were provided", req.algorithm)
+			}
+			return nil
+		}
+		return nestError(ErrInvalidChecksumRequest, "%s was requested more than once", req.algorithm)
+	}
+	if req.trailing {
 		if !vr.data.options.trailer {
-			return fmt.Errorf("could not set %s as trailing: not expecting a trailing header", req.algorithm)
+			return nestError(ErrInvalidChecksumRequest, "could not set %s as trailing: not expecting a trailing header", req.algorithm)
 		}
 		if vr.trailingSumAlgo != nil {
-			return fmt.Errorf("could not set %s as trailing: already set to %s", req.algorithm, *vr.trailingSumAlgo)
+			return nestError(ErrInvalidChecksumRequest, "could not set %s as trailing: already set to %s", req.algorithm, *vr.trailingSumAlgo)
+		}
+		if req.algorithm != vr.data.options.trailerAlgo {
+			return nestError(ErrInvalidChecksumRequest, "could not set %s as trailing: %s names %s", req.algorithm, headerXAmzTrailer, vr.data.options.trailerAlgo)
 		}
 		vr.trailingSumAlgo = &req.algorithm
-		fallthrough
-	default:
-		if err := vr.addAlgorithm(req.algorithm); err != nil {
-			return fmt.Errorf("could not add %s: %w", req.algorithm, err)
-		}
-		if !req.trailing {
-			vr.integrity.setDecoded(req.algorithm, req.value)
-		}
+	} else {
+		vr.integrity.setDecoded(req.algorithm, req.value)
 	}
+	vr.algorithms = append(vr.algorithms, req.algorithm)
 	return nil
 }
 
@@ -513,15 +550,23 @@ func (vr *V4VerifiedRequest[T]) Reader(reqs ...ChecksumRequest) (Reader, error) 
 		return vr.wrapped, nil
 	}
 
+	if vr.data.options.invalid {
+		return invalidContentSHA256Reader{}, nil
+	}
+
+	algorithms, trailingSumAlgo, integrity := vr.algorithms, vr.trailingSumAlgo, maps.Clone(vr.integrity)
+	restore := func() {
+		vr.algorithms, vr.trailingSumAlgo, vr.integrity = algorithms, trailingSumAlgo, integrity
+	}
 	if err := vr.requestChecksums(reqs); err != nil {
+		restore()
 		return nil, err
 	}
 	if vr.data.options.trailer && vr.trailingSumAlgo == nil {
-		return nil, errors.New("the trailing checksum algorithm must be specified when the request contains a trailing header")
-	}
-
-	if vr.data.options.invalid {
-		return invalidContentSHA256Reader{}, nil
+		if err := vr.requestChecksum(ChecksumRequest{trailing: true, algorithm: vr.data.options.trailerAlgo}); err != nil {
+			restore()
+			return nil, err
+		}
 	}
 
 	var (
@@ -612,6 +657,7 @@ func (v4 *V4[T]) parseTime(headers http.Header) (string, time.Time, error) {
 				"parsing time with formats failed: %w", err,
 			)
 		}
+		parsed = parsed.UTC()
 		return parsed.Format(timeFormatISO8601), parsed, nil
 	}
 	return "", time.Time{}, ErrInvalidDateHeader // no date header at all
@@ -646,11 +692,11 @@ type parsedCredential struct {
 	scope       scope
 }
 
-func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool) (parsedCredential, error) {
+func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool, malformed error) (parsedCredential, error) {
 	if !skipPrefixCheck {
 		if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
 			return parsedCredential{}, nestError(
-				ErrAuthorizationHeaderMalformed,
+				malformed,
 				"the Credential parameter is missing",
 			)
 		}
@@ -661,7 +707,7 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 
 	if len(parts) != 5 {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain necessary parts",
 		)
 	}
@@ -671,35 +717,35 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 	date, err := time.Parse(timeFormatYYYYMMDD, parts[1])
 	if err != nil {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain a valid date: %w", err,
 		)
 	}
 
 	if date.Year() != expectedDate.Year() || date.Month() != expectedDate.Month() || date.Day() != expectedDate.Day() {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected date",
 		)
 	}
 
 	if !v4.config.SkipRegionVerification && parts[2] != v4.config.Region {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected region",
 		)
 	}
 
 	if parts[3] != v4.config.Service {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected service",
 		)
 	}
 
 	if parts[4] != v4AuthorizationHeaderCredentialTerminator {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected terminator",
 		)
 	}
@@ -714,12 +760,12 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 	}, nil
 }
 
-func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool) ([]string, error) {
+func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool, malformed error) ([]string, error) {
 	if !skipPrefixCheck {
 		rawSignedHeaders = trimSpaceLeft(rawSignedHeaders) // SDKs such as AWS SDK for Go add space here
 		if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
 			return nil, nestError(
-				ErrAuthorizationHeaderMalformed,
+				malformed,
 				"the SignedHeaders parameter is missing",
 			)
 		}
@@ -736,13 +782,13 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 	for _, header := range signedHeaders {
 		if header != strings.ToLower(header) {
 			return nil, nestError(
-				ErrAuthorizationHeaderMalformed,
+				malformed,
 				"the SignedHeaders parameter contains a header that is not lowercase: %s", header,
 			)
 		}
 		if header < previousHeader {
 			return nil, nestError(
-				ErrAuthorizationHeaderMalformed,
+				malformed,
 				"the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader,
 			)
 		}
@@ -773,7 +819,7 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 		if strings.EqualFold(key, headerContentMD5) {
 			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
 				return nil, nestError(
-					ErrMissingSecurityHeader,
+					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", headerContentMD5,
 				)
 			}
@@ -781,7 +827,7 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
 			if _, ok := signedHeadersLookup[k]; !ok {
 				return nil, nestError(
-					ErrMissingSecurityHeader,
+					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", k,
 				)
 			}
@@ -844,12 +890,12 @@ func (v4 *V4[T]) parseAuthorization(rawAuthorization string, expectedDate time.T
 		)
 	}
 
-	credential, err := v4.parseCredential(pairs[0], expectedDate, false)
+	credential, err := v4.parseCredential(pairs[0], expectedDate, false, ErrAuthorizationHeaderMalformed)
 	if err != nil {
 		return v4ParsedAuthorization{}, err
 	}
 
-	signedHeaders, err := v4.parseSignedHeaders(pairs[1], headers, false)
+	signedHeaders, err := v4.parseSignedHeaders(pairs[1], headers, false, ErrAuthorizationHeaderMalformed)
 	if err != nil {
 		return v4ParsedAuthorization{}, err
 	}
@@ -873,12 +919,12 @@ func (v4 *V4[T]) parseAuthorizationFromQuery(query url.Values, expectedDate time
 		return v4ParsedAuthorization{}, err
 	}
 
-	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true)
+	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true, ErrAuthorizationQueryParametersError)
 	if err != nil {
 		return v4ParsedAuthorization{}, err
 	}
 
-	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true)
+	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true, ErrAuthorizationQueryParametersError)
 	if err != nil {
 		return v4ParsedAuthorization{}, err
 	}
@@ -901,6 +947,7 @@ type parsedXAmzContentSHA256 struct {
 	streaming            bool
 	signingAlgo          v4SigningAlgorithm
 	trailer              bool
+	trailerAlgo          ChecksumAlgorithm
 	decodedContentLength int64
 
 	sumRequest ChecksumRequest
@@ -916,7 +963,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 		)
 	}
 
-	decodedContentLength, err := strconv.ParseInt(rawDecodedContentLength, 10, 64)
+	decodedContentLength, err := strconv.ParseUint(rawDecodedContentLength, 10, 63)
 	if err != nil {
 		return 0, ErrInvalidXAmzDecodedContentLength
 	}
@@ -932,7 +979,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 		)
 	}
 
-	return decodedContentLength, nil
+	return int64(decodedContentLength), nil
 }
 
 func (v4 *V4[T]) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.Header) (parsedXAmzContentSHA256, error) {
@@ -990,6 +1037,32 @@ func (v4 *V4[T]) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers htt
 	}, nil
 }
 
+// parseTrailer requires X-Amz-Trailer exactly when the payload has a trailer
+// and records the checksum algorithm it names.
+func (o *parsedXAmzContentSHA256) parseTrailer(values []string) error {
+	if !o.trailer {
+		if len(values) > 0 {
+			return nestError(ErrInvalidRequest, "the %s header requires a payload with a trailer", headerXAmzTrailer)
+		}
+		return nil
+	}
+	if len(values) == 0 {
+		return nestError(ErrMalformedTrailer, "the %s header is missing", headerXAmzTrailer)
+	}
+	if len(values) == 1 {
+		name := strings.ToLower(strings.TrimSpace(values[0]))
+		if name, ok := strings.CutPrefix(name, chunkTrailingHeaderPrefix); ok {
+			for a := AlgorithmCRC32; a < algorithmHashedPayload; a++ {
+				if a.String() == name {
+					o.trailerAlgo = a
+					return nil
+				}
+			}
+		}
+	}
+	return nestError(ErrInvalidRequest, "the value specified in the %s header is not supported", headerXAmzTrailer)
+}
+
 func (v4 *V4[T]) parsePresignedXAmzContentSHA256(rawXAmzContentSHA256 string) parsedXAmzContentSHA256 {
 	if rawXAmzContentSHA256 == unsignedPayload {
 		return parsedXAmzContentSHA256{unsigned: true}
@@ -1008,19 +1081,37 @@ func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedH
 	b.WriteString(r.Method)
 	b.WriteByte(lf)
 	// canonical uri
-	b.WriteString(uriEncode(r.URL.Path, true))
+	path := r.URL.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	// S3 signs the escaped path verbatim; other services escape it again.
+	if v4.config.Service != "s3" {
+		path = uriEncode(path, true)
+	}
+	b.WriteString(path)
 	b.WriteByte(lf)
 	// canonical query string
-	queryParams := slices.Collect(maps.Keys(query))
+	encodedQuery := make(url.Values, len(query))
+	for key, values := range query {
+		encodedKey := uriEncode(key, false)
+		for _, value := range values {
+			encodedQuery[encodedKey] = append(encodedQuery[encodedKey], uriEncode(value, false))
+		}
+		slices.Sort(encodedQuery[encodedKey])
+	}
+	queryParams := slices.Collect(maps.Keys(encodedQuery))
 	slices.Sort(queryParams)
-	for i, p := range queryParams {
-		for _, v := range query[p] {
-			if i > 0 {
+	first := true
+	for _, p := range queryParams {
+		for _, v := range encodedQuery[p] {
+			if !first {
 				b.WriteByte('&')
 			}
-			b.WriteString(uriEncode(p, false))
+			first = false
+			b.WriteString(p)
 			b.WriteByte('=')
-			b.WriteString(uriEncode(v, false))
+			b.WriteString(v)
 		}
 	}
 	b.WriteByte(lf)
@@ -1036,12 +1127,15 @@ func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedH
 			b.WriteByte(lf)
 			continue
 		}
-		for _, v := range r.Header.Values(name) {
-			b.WriteString(name)
-			b.WriteByte(':')
-			b.WriteString(strings.TrimSpace(v))
-			b.WriteByte(lf)
+		b.WriteString(name)
+		b.WriteByte(':')
+		for i, v := range r.Header.Values(name) {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(canonicalV4HeaderValue(v))
 		}
+		b.WriteByte(lf)
 	}
 	b.WriteByte(lf)
 	// signed headers
@@ -1082,7 +1176,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 		return v4VerifiedData[T]{}, ErrInvalidPOSTDate
 	}
 
-	if v4.now().Before(parsedDateTime) {
+	if v4.now().Add(maxRequestTimeSkew).Before(parsedDateTime) {
 		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	}
 
@@ -1091,7 +1185,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 		return v4VerifiedData[T]{}, err
 	}
 
-	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true)
+	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true, ErrAuthorizationHeaderMalformed)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
@@ -1132,7 +1226,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 	}, nil
 }
 
-func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
+func (v4 *V4[T]) verify(r *http.Request, query url.Values) (v4VerifiedData[T], error) {
 	rawDate, parsedDateTime, err := v4.parseTime(r.Header)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
@@ -1162,13 +1256,16 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
+	if err = options.parseTrailer(r.Header.Values(headerXAmzTrailer)); err != nil {
+		return v4VerifiedData[T]{}, err
+	}
 
 	secretAccessKey, data, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
 
-	canonicalRequestHash := v4.canonicalRequestHash(r, r.URL.Query(), authorization.signedHeaders, rawXAmzContentSHA256)
+	canonicalRequestHash := v4.canonicalRequestHash(r, query, authorization.signedHeaders, rawXAmzContentSHA256)
 
 	signature := calculateSignatureV4(signatureV4Data{
 		algorithm:       authorization.signingAlgo,
@@ -1212,7 +1309,7 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, ErrInvalidPresignedDate
 	}
 
-	if now := v4.now(); now.Before(parsedDateTime) {
+	if now := v4.now(); now.Add(maxRequestTimeSkew).Before(parsedDateTime) {
 		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	} else if now.After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
 		return v4VerifiedData[T]{}, ErrRequestExpired
@@ -1233,6 +1330,9 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		rawXAmzContentSHA256 = unsignedPayload
 	}
 	options := v4.parsePresignedXAmzContentSHA256(rawXAmzContentSHA256)
+	if err = options.parseTrailer(r.Header.Values(headerXAmzTrailer)); err != nil {
+		return v4VerifiedData[T]{}, err
+	}
 
 	query.Del(queryXAmzSignature)
 	canonicalRequestHash := v4.canonicalRequestHash(r, query, authorization.signedHeaders, rawXAmzContentSHA256)
@@ -1262,29 +1362,37 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 
 // Verify verifies the AWS Signature Version 4 for the given request and
 // returns a verified request.
+//
+// See [VerifiedRequest.PostForm] for multipart POST policy validation requirements.
 func (v4 *V4[T]) Verify(r *http.Request) (*V4VerifiedRequest[T], error) {
+	query, err := parseRequestQuery(r)
+	if err != nil {
+		return nil, err
+	}
+
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""
 	}
 
-	if r.Method == http.MethodPost && typ == "multipart/form-data" {
+	switch {
+	case r.Method == http.MethodPost && typ == "multipart/form-data":
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, ErrMalformedPOSTRequest
+			return nil, nestError(ErrMalformedPOSTRequest, "parse multipart form: %w", err)
 		}
 		data, err := v4.verifyPost(r.Context(), form)
 		if err != nil {
 			return nil, err
 		}
 		return newV4VerifiedRequestWithForm(file, data, form)
-	} else if r.Header.Get(headerAuthorization) != "" {
-		data, err := v4.verify(r)
+	case r.Header.Get(headerAuthorization) != "":
+		data, err := v4.verify(r, query)
 		if err != nil {
 			return nil, err
 		}
 		return newV4VerifiedRequest(r.Body, data)
-	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
+	case query.Has(queryXAmzAlgorithm):
 		data, err := v4.verifyPresigned(r, query)
 		if err != nil {
 			return nil, err

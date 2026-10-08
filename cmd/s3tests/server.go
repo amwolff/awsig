@@ -602,8 +602,18 @@ func xmlHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, 
 
 func awsigErrorToHTTPError(ctx context.Context, log *slog.Logger, w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, awsig.ErrMalformedTrailer):
+		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "MalformedTrailerError", "The request contained trailing data that was not well-formed or did not conform to our published schema.")
+	case errors.Is(err, awsig.ErrInvalidRequest), errors.Is(err, awsig.ErrInvalidChecksumRequest):
+		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidRequest", "The request is invalid.")
 	case errors.Is(err, awsig.ErrBadDigest):
 		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "BadDigest", "The Content-MD5 or checksum value that you specified did not match what the server received.")
+	case errors.Is(err, awsig.ErrInvalidChunkSize):
+		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "InvalidChunkSizeError", "Only the last chunk is allowed to have a size less than 8192 bytes.")
+	case errors.Is(err, awsig.ErrAuthorizationQueryParametersError):
+		xmlHTTPError(ctx, log, w, http.StatusBadRequest, "AuthorizationQueryParametersError", "The authorization query parameters are not valid.")
+	case errors.Is(err, awsig.ErrUnsignedHeader):
+		xmlHTTPError(ctx, log, w, http.StatusForbidden, "AccessDenied", "There were headers present in the request which were not signed")
 	case errors.Is(err, awsig.ErrInvalidDateHeader):
 		xmlHTTPError(ctx, log, w, http.StatusForbidden, "AccessDenied", "AWS authentication requires a valid Date or x-amz-date header")
 	case errors.Is(err, awsig.ErrRequestTimeTooSkewed):

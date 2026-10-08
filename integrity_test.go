@@ -2,7 +2,10 @@ package awsig
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -101,4 +104,91 @@ func TestChecksumMismatchError(t *testing.T) {
 			IsContentSHA256:    true,
 		},
 	}, mismatchErr.Mismatches)
+}
+
+func TestReaderRetryAfterFailedChecksumRequest(t *testing.T) {
+	crc32Req, err := NewChecksumRequest(AlgorithmCRC32, "AAAAAA==")
+	assert.NoError(t, err)
+	sha1Req, err := NewChecksumRequest(AlgorithmSHA1, "2jmj7l5rSw0yVb/vlWAYkK/YBwk=")
+	assert.NoError(t, err)
+	otherSHA1Req, err := NewChecksumRequest(AlgorithmSHA1, "qvTGHdzF6KLavt4PO0gs2a6pQ00=")
+	assert.NoError(t, err)
+
+	t.Run("V2", func(t *testing.T) {
+		vr, err := newV2VerifiedRequest(strings.NewReader(""), v2VerifiedData[struct{}]{})
+		assert.NoError(t, err)
+		_, err = vr.Reader(sha1Req, otherSHA1Req)
+		assert.That(t, errors.Is(err, ErrBadDigest))
+		_, err = vr.Reader(sha1Req, crc32Req)
+		assert.NoError(t, err)
+	})
+	t.Run("V4", func(t *testing.T) {
+		vr, err := newV4VerifiedRequest(strings.NewReader(""), v4VerifiedData[struct{}]{
+			options: parsedXAmzContentSHA256{unsigned: true},
+		})
+		assert.NoError(t, err)
+		_, err = vr.Reader(sha1Req, otherSHA1Req)
+		assert.That(t, errors.Is(err, ErrBadDigest))
+		rd, err := vr.Reader(sha1Req, crc32Req)
+		assert.NoError(t, err)
+		_, err = io.ReadAll(rd)
+		assert.NoError(t, err)
+	})
+}
+
+func TestIntegrityReaderSharesSHA256(t *testing.T) {
+	one := testing.AllocsPerRun(10, func() { newIntegrityReader(nil, []ChecksumAlgorithm{AlgorithmSHA256}) })
+	both := testing.AllocsPerRun(10, func() {
+		newIntegrityReader(nil, []ChecksumAlgorithm{algorithmHashedPayload, AlgorithmSHA256})
+	})
+	assert.Equal(t, one, both)
+
+	ir := newIntegrityReader(strings.NewReader(data), []ChecksumAlgorithm{algorithmHashedPayload, AlgorithmSHA256})
+	_, err := io.ReadAll(ir)
+	assert.NoError(t, err)
+	assert.NoError(t, ir.verify(expectedIntegrity{AlgorithmSHA256: dataSha256, algorithmHashedPayload: dataSha256}))
+}
+
+func BenchmarkCRC64NVMEReader(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		r := newIntegrityReader(strings.NewReader(""), []ChecksumAlgorithm{AlgorithmCRC64NVME})
+		_, _ = io.Copy(io.Discard, r)
+	}
+}
+
+func TestChecksumDecodedLengths(t *testing.T) {
+	for _, tc := range []struct {
+		algorithm ChecksumAlgorithm
+		size      int
+	}{
+		{AlgorithmCRC32, 4}, {AlgorithmCRC32C, 4}, {AlgorithmCRC64NVME, 8},
+		{AlgorithmMD5, 16}, {AlgorithmSHA1, 20}, {AlgorithmSHA256, 32},
+		{algorithmHashedPayload, 32},
+	} {
+		for size := tc.size - 2; size <= tc.size+2; size++ {
+			t.Run(fmt.Sprintf("%d/%d", tc.algorithm, size), func(t *testing.T) {
+				digest := make([]byte, size)
+				encoded := base64.StdEncoding.EncodeToString(digest)
+				if tc.algorithm == algorithmHashedPayload {
+					encoded = hex.EncodeToString(digest)
+				}
+				_, constructorErr := NewChecksumRequest(tc.algorithm, encoded)
+				decoded, decodeErr := decodeChecksum(tc.algorithm, []byte(encoded))
+				integrity := make(expectedIntegrity)
+				trailerErr := integrity.setEncoded(tc.algorithm, []byte(encoded))
+				for name, err := range map[string]error{"constructor": constructorErr, "decoder": decodeErr, "trailer": trailerErr} {
+					if size == tc.size && err != nil {
+						t.Errorf("%s: %v", name, err)
+					}
+					if size != tc.size && err == nil {
+						t.Errorf("%s accepted %d-byte %s digest", name, size, tc.algorithm)
+					}
+				}
+				if size == tc.size && !bytes.Equal(decoded, digest) {
+					t.Fatal("decoded digest differs")
+				}
+			})
+		}
+	}
 }

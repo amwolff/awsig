@@ -75,7 +75,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			assert.That(t, errors.Is(err, io.EOF))
 		})
 		t.Run("PUT Object", func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test$file.text", strings.NewReader(putContent))
+			req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test%24file.text", strings.NewReader(putContent))
 			req.Header.Add("Date", "Fri, 24 May 2013 00:00:00 GMT")
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class,Signature=98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd")
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -143,7 +143,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 				body.WriteByte('a')
 			}
 			body.WriteString("\r\n")
-			body.WriteString("0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n")
+			body.WriteString("0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n\r\n")
 
 			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -181,7 +181,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			body.WriteString("\r\n")
 			body.WriteString("0;chunk-signature=2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992\r\n")
 			body.WriteString("x-amz-checksum-crc32c:sOO8/Q==\r\n")
-			body.WriteString("x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n")
+			body.WriteString("x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n\r\n")
 
 			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -214,6 +214,40 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 				AlgorithmMD5:    {0xda, 0x0d, 0x2e, 0x17, 0xcd, 0x5a, 0x8f, 0x14, 0x63, 0x3c, 0x6b, 0x4a, 0xeb, 0xad, 0x7e, 0x02},
 			}, checksums)
 		})
+		t.Run("signed truncated", func(t *testing.T) {
+			for _, ending := range []string{"", "\r"} {
+				body := bytes.NewBuffer(nil)
+				body.WriteString("10000;chunk-signature=b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2\r\n")
+				body.Write(bytes.Repeat([]byte{'a'}, 65536))
+				body.WriteString("\r\n")
+				body.WriteString("400;chunk-signature=1c1344b170168f8e65b41376b44b20fe354e373826ccbbe2c1d40a8cae51e5c7\r\n")
+				body.Write(bytes.Repeat([]byte{'a'}, 1024))
+				body.WriteString("\r\n")
+				body.WriteString("0;chunk-signature=2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992\r\n")
+				body.WriteString("x-amz-checksum-crc32c:sOO8/Q==\r\n")
+				body.WriteString("x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n" + ending)
+
+				req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
+				req.Header.Add("x-amz-date", "20130524T000000Z")
+				req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+				req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class;x-amz-trailer,Signature=106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e")
+				req.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER")
+				req.Header.Add("Content-Encoding", "aws-chunked")
+				req.Header.Add("x-amz-decoded-content-length", "66560")
+				req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
+				req.Header.Add("Content-Length", "66824")
+
+				vr, err := v4.Verify(req, "")
+				assert.NoError(t, err)
+
+				r, err := vr.Reader()
+				assert.NoError(t, err)
+
+				_, err = io.ReadAll(r)
+				assert.True(t, errors.Is(err, ErrMalformedTrailer))
+				assert.True(t, errors.Is(err, io.ErrUnexpectedEOF))
+			}
+		})
 		t.Run("unsigned", func(t *testing.T) {
 			body := bytes.NewBuffer(nil)
 			body.WriteString("2000\r\n")
@@ -234,7 +268,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			body.WriteString("0\r\n")
 			body.WriteString("x-amz-checksum-crc32:s3SFCQ==\n\r\n\r\n")
 
-			req := httptest.NewRequest(http.MethodPut, "https://amzn-s3-demo-bucket.s3.amazonaws.com/Key+", body)
+			req := httptest.NewRequest(http.MethodPut, "https://amzn-s3-demo-bucket.s3.amazonaws.com/Key%2B", body)
 			req.Header.Add("Content-Encoding", "aws-chunked")
 			req.Header.Add("x-amz-decoded-content-length", "17408")
 			req.Header.Add("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
@@ -279,6 +313,15 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		n, err := r.Read(p)
 		assert.That(t, n == 0)
 		assert.That(t, errors.Is(err, io.EOF))
+	})
+	t.Run("presigned (within clock skew)", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", nil)
+
+		_, err := newV4(provider, dummyNow(2013, time.May, 23, 23, 50, 0)).Verify(req, "")
+		assert.NoError(t, err)
+
+		_, err = newV4(provider, dummyNow(2013, time.May, 23, 23, 44, 0)).Verify(req, "")
+		assert.That(t, errors.Is(err, ErrRequestNotYetValid))
 	})
 	t.Run("presigned (POST)", func(t *testing.T) {
 		file := []byte("Hello World!")
@@ -448,4 +491,15 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 	})
+}
+
+func TestV4ParseTimeDateOffset(t *testing.T) {
+	v4 := NewV4[struct{}](nil, V4Config{})
+	h := http.Header{}
+	h.Set("Date", "Fri, 24 May 2013 01:00:00 +0200")
+
+	raw, parsed, err := v4.parseTime(h)
+	assert.NoError(t, err)
+	assert.Equal(t, "20130523T230000Z", raw)
+	assert.Equal(t, 23, parsed.Day())
 }

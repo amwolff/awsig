@@ -19,6 +19,8 @@ var (
 	ErrAccessDenied = errors.New("access denied")
 	// ErrAuthorizationHeaderMalformed indicates the AuthorizationHeaderMalformed error code.
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
+	// ErrAuthorizationQueryParametersError indicates the AuthorizationQueryParametersError error code.
+	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
 	// ErrBadDigest indicates the BadDigest error code.
 	ErrBadDigest = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
 	// ErrContentLengthWithTransferEncoding indicates that both the Content-Length and Transfer-Encoding headers were provided.
@@ -31,6 +33,10 @@ var (
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 	// ErrInvalidArgument indicates the InvalidArgument error code.
 	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrInvalidChecksumRequest indicates that the requested checksums are inconsistent with the request's payload.
+	ErrInvalidChecksumRequest = errors.New("the requested checksums are inconsistent with the request payload")
+	// ErrInvalidChunkSize indicates the InvalidChunkSizeError error code.
+	ErrInvalidChunkSize = errors.New("only the last chunk is allowed to have a size less than 8192 bytes")
 	// ErrInvalidDateHeader indicates that the Date or X-Amz-Date header is not valid.
 	ErrInvalidDateHeader = errors.New("AWS authentication requires a valid Date or x-amz-date header")
 	// ErrInvalidDigest indicates the InvalidDigest error code.
@@ -54,6 +60,8 @@ var (
 	ErrInvalidXAmzDecodedContentLength = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
 	// ErrMalformedPOSTRequest indicates that a POST request is malformed.
 	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
+	// ErrMalformedTrailer indicates the MalformedTrailerError error code.
+	ErrMalformedTrailer = errors.New("the request contained trailing data that was not well-formed")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
 	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
 	// ErrMissingPOSTFile indicates that a POST request is missing a required file upload.
@@ -76,6 +84,9 @@ var (
 	ErrRequestTimeTooSkewed = errors.New("the difference between the request time and the server's time is too large")
 	// ErrSignatureDoesNotMatch indicates the SignatureDoesNotMatch error code.
 	ErrSignatureDoesNotMatch = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrUnsignedHeader indicates that the request contains headers that must be signed but were not.
+	// AWS reports this as AccessDenied.
+	ErrUnsignedHeader = errors.New("there were headers present in the request which were not signed")
 	// ErrUnsupportedSignature indicates the UnsupportedSignature error code.
 	ErrUnsupportedSignature = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
 )
@@ -105,7 +116,8 @@ var httpTimeFormats = []string{
 	time.ANSIC,
 }
 
-var errMessageTooLarge = errors.New("message too large")
+// ErrMessageTooLarge indicates that multipart form metadata exceeds the 20 KB limit.
+var ErrMessageTooLarge = errors.New("message too large")
 
 // CredentialsProvider is the interface that all users of this package
 // must implement. Provide is called by signature verifiers. If the
@@ -235,12 +247,19 @@ type (
 		AuthData() T
 		// PostForm returns the parsed multipart form data if the
 		// request is a POST with "multipart/form-data" Content-Type.
+		// Only the policy signature has been verified. Before accepting an upload,
+		// callers must decode and validate its policy expiration and every condition
+		// (including bucket, key, ACL, form fields, and content-length-range).
+		// Reader does not enforce the policy or its upload size limits.
+		// Signature verification does not establish permission to perform an operation.
 		PostForm() PostForm
 		// Reader returns a Reader to read the body of the verified
 		// request. Reader can be called multiple times, but only the
-		// first call can request checksums. Checksum requests must have
-		// distinct algorithms. If the request includes a trailing
-		// checksum header, at least one checksum must be requested.
+		// first call can request checksums. Requests for the same
+		// algorithm must carry the same value. If the request includes a
+		// trailing checksum, it is verified using the algorithm named by
+		// X-Amz-Trailer; a trailing checksum request, if given, must name
+		// the same algorithm.
 		Reader(...ChecksumRequest) (Reader, error)
 	}
 )
@@ -389,7 +408,7 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		part, err := mr.NextPart()
 		if err != nil {
 			if errors.Is(err, errLimitReached) {
-				err = errMessageTooLarge
+				err = ErrMessageTooLarge
 			} else if errors.Is(err, io.EOF) {
 				break
 			}
@@ -398,7 +417,7 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 
 		name := part.FormName()
 
-		if name == "file" {
+		if strings.EqualFold(name, "file") {
 			lr.toggle() // stop limiting the reader as we reached the file part
 			form.Set(name, PostFormElement{
 				Headers: part.Header,
@@ -410,7 +429,7 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		b, err := io.ReadAll(part)
 		if err != nil {
 			if errors.Is(err, errLimitReached) {
-				err = errMessageTooLarge
+				err = ErrMessageTooLarge
 			}
 			if errClose := part.Close(); errClose != nil {
 				err = errors.Join(err, errClose)
@@ -428,4 +447,18 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 	}
 
 	return nil, PostForm{}, ErrMissingPOSTFile
+}
+
+// parseRequestQuery rejects partial query parses before authentication can ignore pairs.
+// Like S3, it splits pairs only on '&' and treats ';' as part of a key or value.
+// It rewrites r.URL.RawQuery so r.URL.Query() sees the same pairs that were verified;
+// otherwise net/url would drop pairs containing ';' after authentication.
+func parseRequestQuery(r *http.Request) (url.Values, error) {
+	rawQuery := strings.ReplaceAll(r.URL.RawQuery, ";", "%3B")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return nil, nestError(ErrInvalidRequest, "parse request query: %w", err)
+	}
+	r.URL.RawQuery = rawQuery
+	return query, nil
 }

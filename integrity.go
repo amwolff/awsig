@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ChecksumAlgorithm represents different checksum algorithms supported
@@ -40,21 +41,25 @@ const (
 	algorithmHashedPayload
 )
 
-func (a ChecksumAlgorithm) base64Length() int {
+func (a ChecksumAlgorithm) size() int {
 	switch a {
 	case AlgorithmCRC32, AlgorithmCRC32C:
-		return base64.StdEncoding.EncodedLen(crc32.Size)
+		return crc32.Size
 	case AlgorithmCRC64NVME:
-		return base64.StdEncoding.EncodedLen(crc64.Size)
+		return crc64.Size
 	case AlgorithmMD5:
-		return base64.StdEncoding.EncodedLen(md5.Size)
+		return md5.Size
 	case AlgorithmSHA1:
-		return base64.StdEncoding.EncodedLen(sha1.Size)
+		return sha1.Size
 	case AlgorithmSHA256, algorithmHashedPayload:
-		return base64.StdEncoding.EncodedLen(sha256.Size)
+		return sha256.Size
 	default:
 		return 0
 	}
+}
+
+func (a ChecksumAlgorithm) base64Length() int {
+	return base64.StdEncoding.EncodedLen(a.size())
 }
 
 func (a ChecksumAlgorithm) valid() bool {
@@ -100,7 +105,7 @@ func NewChecksumRequest(algorithm ChecksumAlgorithm, encodedValue string) (Check
 	if !algorithm.valid() {
 		return ChecksumRequest{}, errors.New("invalid algorithm")
 	}
-	v, err := decodeChecksumString(algorithm, encodedValue)
+	v, err := decodeChecksum(algorithm, []byte(encodedValue))
 	if err != nil {
 		return ChecksumRequest{}, err
 	}
@@ -143,7 +148,7 @@ func (i expectedIntegrity) setEncoded(a ChecksumAlgorithm, value []byte) error {
 }
 
 func (i expectedIntegrity) setEncodedString(a ChecksumAlgorithm, value string) error {
-	v, err := decodeChecksumString(a, value)
+	v, err := decodeChecksum(a, []byte(value))
 	if err != nil {
 		return err
 	}
@@ -254,6 +259,10 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 	return errs
 }
 
+var crc64NVMETable = sync.OnceValue(func() *crc64.Table {
+	return crc64.MakeTable(0x9a6c_9329_ac4b_c9b5)
+})
+
 func newIntegrityReader(r io.Reader, algorithms []ChecksumAlgorithm) *integrityReader {
 	ir := &integrityReader{
 		hashes: make(map[ChecksumAlgorithm]hash.Hash),
@@ -276,7 +285,7 @@ func newIntegrityReader(r io.Reader, algorithms []ChecksumAlgorithm) *integrityR
 			ir.hashes[AlgorithmCRC32C] = h
 			writers = append(writers, h)
 		case AlgorithmCRC64NVME:
-			h = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
+			h = crc64.New(crc64NVMETable())
 			ir.hashes[AlgorithmCRC64NVME] = h
 			writers = append(writers, h)
 		case AlgorithmSHA1:
@@ -284,6 +293,9 @@ func newIntegrityReader(r io.Reader, algorithms []ChecksumAlgorithm) *integrityR
 			ir.hashes[AlgorithmSHA1] = h
 			writers = append(writers, h)
 		case AlgorithmSHA256, algorithmHashedPayload:
+			if _, ok := ir.hashes[AlgorithmSHA256]; ok {
+				continue
+			}
 			h = sha256.New()
 			ir.hashes[AlgorithmSHA256] = h
 			ir.hashes[algorithmHashedPayload] = h
@@ -316,26 +328,24 @@ func decodeChecksum(a ChecksumAlgorithm, v []byte) ([]byte, error) {
 	if err := testChecksumLen(a, v); err != nil {
 		return nil, err
 	}
+	var (
+		dst []byte
+		n   int
+		err error
+	)
 	switch a {
 	case algorithmHashedPayload:
-		dst := make([]byte, hex.DecodedLen(len(v)))
-		n, err := hex.Decode(dst, v)
-		return dst[:n], err
+		dst = make([]byte, hex.DecodedLen(len(v)))
+		n, err = hex.Decode(dst, v)
 	default:
-		dst := make([]byte, base64.StdEncoding.DecodedLen(len(v)))
-		n, err := base64.StdEncoding.Decode(dst, v)
-		return dst[:n], err
+		dst = make([]byte, base64.StdEncoding.DecodedLen(len(v)))
+		n, err = base64.StdEncoding.Decode(dst, v)
 	}
-}
-
-func decodeChecksumString(a ChecksumAlgorithm, v string) ([]byte, error) {
-	if err := testChecksumLen(a, []byte(v)); err != nil {
+	if err != nil {
 		return nil, err
 	}
-	switch a {
-	case algorithmHashedPayload:
-		return hex.DecodeString(v)
-	default:
-		return base64.StdEncoding.DecodeString(v)
+	if n != a.size() {
+		return nil, fmt.Errorf("invalid decoded length for %s: expected %d, got %d", a, a.size(), n)
 	}
+	return dst[:n], nil
 }

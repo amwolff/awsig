@@ -185,3 +185,21 @@ func trimSpaceLeft(s string) string {
 	// we're done. Non-ASCII cases have already been handled above.
 	return s[start:]
 }
+
+// canonicalV4HeaderValue trims surrounding whitespace and collapses ASCII
+// spaces, preserving internal tabs and Unicode as the AWS Go SDK does.
+func canonicalV4HeaderValue(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(value, "  ") {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	for i := range len(value) {
+		if value[i] == ' ' && i > 0 && value[i-1] == ' ' {
+			continue
+		}
+		b.WriteByte(value[i])
+	}
+	return b.String()
+}

@@ -10,14 +10,38 @@ for building AWS-compatible services.
 | SigV4 |            ✓            |         ✓        |                  ✓                 |                  ✓                 |                      ✓                     |              _unimplemented_             |                  _unimplemented_                 |     ✓     |         ✓        |
 
 This package was written with S3 and certain security and performance
-characteristics in mind, but it should work for other service clones as
-well.
+characteristics in mind. Support for other service clones is partial: non-S3
+paths are encoded again for signing, but dot segments and repeated slashes are
+not normalized.
 
 ### TODO
 
 - [x] verify the returned errors (error codes) with the real AWS (preferably S3) or a close clone, like Ceph
 - [ ] do shallow test runs with all publicly available AWS SDKs
     - [ ] SDKs act differently with and without TLS and with different checksum options
+
+## SigV2 compatibility
+
+The signed subresource list matches `HmacV1Auth.QSAOfInterest` from
+[botocore 1.40.0](https://github.com/boto/botocore/blob/1.40.0/botocore/auth.py#L795-L834),
+including `storageClass` and `defaultObjectAcl`. The verifier uses this single
+list; it does not retry with another client's canonicalization rules.
+
+SigV2 requests containing `encryption`, `legal-hold`, `retention`,
+`intelligent-tiering`, `ownershipControls`, `policyStatus`, or `publicAccessBlock`
+are rejected with `ErrInvalidRequest` and must use SigV4. Botocore's SigV2 list
+does not sign these operation selectors. Applications adding other operation
+selectors absent from the list must also require SigV4 for those operations.
+
+## POST policy validation
+
+For multipart POST uploads, `Verify` authenticates the signature over the policy;
+it does **not** enforce policy expiration or conditions. Before accepting an upload,
+the application must decode and validate the policy, including its expiration,
+bucket, key/prefix, ACL, form fields, and content-length-range. This applies to both
+SigV2 and SigV4. The SigV4 form-date check does not replace policy expiration checks,
+and `Reader` does not enforce policy size limits. A `VerifiedRequest` is not an
+authorization decision.
 
 ## example usage
 
@@ -65,6 +89,8 @@ func …(w http.ResponseWriter, r *http.Request) {
 	}
 	// (4) If the request is a multipart/form-data POST, you can access the parsed form values:
 	form := vr.PostForm()
+	// For POST uploads, validate the policy expiration and all conditions
+	// against this form, the target bucket, and the file before accepting it.
 	//
 	// Important: if you intend to read the body, use vr.Reader() instead of r.Body.
 	//
@@ -80,7 +106,7 @@ func …(w http.ResponseWriter, r *http.Request) {
 	// (6) Read the body. Notes:
 	//
 	// - requested checksums are verified automatically
-	// - if the request includes a trailing checksum header, at least one checksum must be requested
+	// - a trailing checksum is verified using the algorithm named by x-amz-trailer
 	// - if not explicitly requested:
 	//   - MD5 is always computed and available after reading
 	//   - SHA256 is computed and available after reading, depending on the request type

@@ -1,6 +1,7 @@
 package awsig
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -23,6 +24,59 @@ const (
 	queryExpires        = "Expires"
 	querySignature      = "Signature"
 )
+
+// v2SignedSubresources matches HmacV1Auth.QSAOfInterest in botocore 1.40.0:
+// https://github.com/boto/botocore/blob/1.40.0/botocore/auth.py#L795-L834
+// Keep one canonicalization policy; do not retry signatures with other SDK lists.
+// Known operation selectors outside this list are rejected by validateV2Query.
+var v2SignedSubresources = map[string]struct{}{
+	"accelerate":                   {},
+	"acl":                          {},
+	"analytics":                    {},
+	"cors":                         {},
+	"defaultObjectAcl":             {},
+	"delete":                       {},
+	"inventory":                    {},
+	"lifecycle":                    {},
+	"location":                     {},
+	"logging":                      {},
+	"metrics":                      {},
+	"notification":                 {},
+	"object-lock":                  {},
+	"partNumber":                   {},
+	"policy":                       {},
+	"replication":                  {},
+	"requestPayment":               {},
+	"restore":                      {},
+	"select":                       {},
+	"select-type":                  {},
+	"storageClass":                 {},
+	"tagging":                      {},
+	"torrent":                      {},
+	"uploadId":                     {},
+	"uploads":                      {},
+	"versionId":                    {},
+	"versioning":                   {},
+	"versions":                     {},
+	"website":                      {},
+	"response-content-type":        {},
+	"response-content-language":    {},
+	"response-expires":             {},
+	"response-cache-control":       {},
+	"response-content-disposition": {},
+	"response-content-encoding":    {},
+}
+
+// validateV2Query prevents known operation selectors omitted by the pinned
+// signer from being accepted as unsigned parameters. Use SigV4 for these APIs.
+func validateV2Query(query url.Values) error {
+	for _, key := range []string{"encryption", "legal-hold", "retention", "intelligent-tiering", "ownershipControls", "policyStatus", "publicAccessBlock"} {
+		if query.Has(key) {
+			return nestError(ErrInvalidRequest, "the %s operation requires SigV4", key)
+		}
+	}
+	return nil
+}
 
 type v2Reader struct {
 	ir        *integrityReader
@@ -77,17 +131,9 @@ func (vr *V2VerifiedRequest[T]) AuthData() T {
 	return vr.data.authData
 }
 
-// PostForm implements VerifiedRequest.
+// PostForm implements [VerifiedRequest.PostForm].
 func (vr *V2VerifiedRequest[T]) PostForm() PostForm {
 	return vr.form
-}
-
-func (vr *V2VerifiedRequest[T]) addAlgorithm(algorithm ChecksumAlgorithm) error {
-	if slices.Contains(vr.algorithms, algorithm) {
-		return errors.New("algorithm already added")
-	}
-	vr.algorithms = append(vr.algorithms, algorithm)
-	return nil
 }
 
 func (vr *V2VerifiedRequest[T]) requestChecksum(req ChecksumRequest) error {
@@ -95,11 +141,16 @@ func (vr *V2VerifiedRequest[T]) requestChecksum(req ChecksumRequest) error {
 		return fmt.Errorf("uninitialized request")
 	}
 	if req.trailing {
-		return fmt.Errorf("could not add %s: trailing checksums are not supported in V2", req.algorithm)
+		return nestError(ErrInvalidChecksumRequest, "could not add %s: trailing checksums are not supported in V2", req.algorithm)
 	}
-	if err := vr.addAlgorithm(req.algorithm); err != nil {
-		return fmt.Errorf("could not add %s: %w", req.algorithm, err)
+	if expected, ok := vr.integrity[req.algorithm]; ok {
+		// Content-MD5 and X-Amz-Checksum-Md5 may both carry the same digest.
+		if !bytes.Equal(expected, req.value) {
+			return nestError(ErrBadDigest, "conflicting %s checksums were provided", req.algorithm)
+		}
+		return nil
 	}
+	vr.algorithms = append(vr.algorithms, req.algorithm)
 	vr.integrity.setDecoded(req.algorithm, req.value)
 	return nil
 }
@@ -122,7 +173,9 @@ func (vr *V2VerifiedRequest[T]) Reader(reqs ...ChecksumRequest) (Reader, error) 
 		return vr.wrapped, nil
 	}
 
+	algorithms, integrity := vr.algorithms, maps.Clone(vr.integrity)
 	if err := vr.requestChecksums(reqs); err != nil {
+		vr.algorithms, vr.integrity = algorithms, integrity
 		return nil, err
 	}
 
@@ -167,7 +220,7 @@ func (v2 *V2[T]) parseTime(headers http.Header) (string, time.Time, error) {
 				"parsing time with formats failed: %w", err,
 			)
 		}
-		return alt, parsed, nil
+		return "", parsed, nil
 	}
 	if alt != "" {
 		parsed, err := parseTimeWithFormats(alt, httpTimeFormats)
@@ -225,7 +278,7 @@ func (v2 *V2[T]) parseAuthorization(rawAuthorization string) (v2ParsedAuthorizat
 	}, nil
 }
 
-func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedBucket, key string) signatureV2 {
+func (v2 *V2[T]) calculateSignature(r *http.Request, query url.Values, dateElement, virtualHostedBucket, key string) signatureV2 {
 	b := newHashBuilder(func() hash.Hash { return hmac.New(sha1.New, []byte(key)) })
 
 	b.WriteString(r.Method)
@@ -251,7 +304,8 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			b.WriteString(v)
+			// net/http unfolds HTTP headers; trim each value before joining.
+			b.WriteString(strings.TrimSpace(v))
 		}
 		b.WriteByte(lf)
 	}
@@ -265,63 +319,38 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 	// might use long after we've authenticated this request.
 	b.WriteString(r.URL.EscapedPath())
 	if virtualHostedBucket == "" {
-		r := strings.TrimPrefix(r.URL.Path, "/")
-		if r != "" && strings.IndexByte(r, '/') < 0 {
-			// For some reason, they sometimes sign requests that
-			// contain just the bucket name with a trailing slash.
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path != "" && !strings.Contains(path, "/") {
+			// Preserve compatibility with clients that send /bucket but sign
+			// /bucket/. Only path-style bucket-only requests get this suffix;
+			// object paths and virtual-hosted requests must remain unchanged.
 			b.WriteByte('/')
 		}
 	}
 
-	if query := r.URL.Query(); len(query) > 0 {
-		included := map[string]bool{
-			"acl":                          true,
-			"lifecycle":                    true,
-			"location":                     true,
-			"logging":                      true,
-			"notification":                 true,
-			"partNumber":                   true,
-			"policy":                       true,
-			"requestPayment":               true,
-			"uploadId":                     true,
-			"uploads":                      true,
-			"versionId":                    true,
-			"versioning":                   true,
-			"versions":                     true,
-			"website":                      true,
-			"response-content-type":        false,
-			"response-content-language":    false,
-			"response-expires":             false,
-			"response-cache-control":       false,
-			"response-content-disposition": false,
-			"response-content-encoding":    false,
-			"delete":                       true,
+	if len(query) > 0 {
+		queryParams := make([]string, 0, len(query))
+		for p := range query {
+			if _, ok := v2SignedSubresources[p]; ok {
+				queryParams = append(queryParams, p)
+			}
 		}
-
-		maps.DeleteFunc(query, func(p string, _ []string) bool {
-			_, ok := included[p]
-			return !ok
-		})
-		queryParams := slices.Collect(maps.Keys(query))
 		slices.Sort(queryParams)
 
-		for i, p := range queryParams {
-			if i == 0 {
-				b.WriteByte('?')
-			}
-
+		first := true
+		for _, p := range queryParams {
 			for _, v := range query[p] {
-				if i > 0 {
+				if first {
+					b.WriteByte('?')
+				} else {
 					b.WriteByte('&')
 				}
+				first = false
 				b.WriteString(p)
 				if v != "" {
 					b.WriteByte('=')
-					if included[p] {
-						b.WriteString(uriEncode(v, false))
-					} else {
-						b.WriteString(v)
-					}
+					// SigV2 signers use decoded subresource and response-header values.
+					b.WriteString(v)
 				}
 			}
 		}
@@ -363,7 +392,10 @@ func (v2 *V2[T]) verifyPost(ctx context.Context, form PostForm) (v2VerifiedData[
 	}, nil
 }
 
-func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2VerifiedData[T], error) {
+func (v2 *V2[T]) verify(r *http.Request, query url.Values, virtualHostedBucket string) (v2VerifiedData[T], error) {
+	if err := validateV2Query(query); err != nil {
+		return v2VerifiedData[T]{}, err
+	}
 	headerDateValue, parsedDateTime, err := v2.parseTime(r.Header)
 	if err != nil {
 		return v2VerifiedData[T]{}, err
@@ -386,7 +418,7 @@ func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2Verified
 		return v2VerifiedData[T]{}, err
 	}
 
-	signature := v2.calculateSignature(r, headerDateValue, virtualHostedBucket, secretAccessKey)
+	signature := v2.calculateSignature(r, query, headerDateValue, virtualHostedBucket, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
 		return v2VerifiedData[T]{}, ErrSignatureDoesNotMatch
@@ -398,6 +430,9 @@ func (v2 *V2[T]) verify(r *http.Request, virtualHostedBucket string) (v2Verified
 }
 
 func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) (v2VerifiedData[T], error) {
+	if err := validateV2Query(query); err != nil {
+		return v2VerifiedData[T]{}, err
+	}
 	rawExpires := query.Get(queryExpires)
 
 	expires, err := strconv.ParseInt(rawExpires, 10, 64)
@@ -423,7 +458,7 @@ func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHoste
 		return v2VerifiedData[T]{}, err
 	}
 
-	if !v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
+	if !v2.calculateSignature(r, query, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
 		return v2VerifiedData[T]{}, ErrSignatureDoesNotMatch
 	}
 
@@ -434,29 +469,40 @@ func (v2 *V2[T]) verifyPresigned(r *http.Request, query url.Values, virtualHoste
 
 // Verify verifies the AWS Signature Version 2 for the given request and
 // returns a verified request.
+//
+// See [VerifiedRequest.PostForm] for multipart POST policy validation requirements.
 func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRequest[T], error) {
+	query, err := parseRequestQuery(r)
+	if err != nil {
+		return nil, err
+	}
+
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""
 	}
 
-	if r.Method == http.MethodPost && typ == "multipart/form-data" {
+	switch {
+	case r.Method == http.MethodPost && typ == "multipart/form-data":
+		if err := validateV2Query(query); err != nil {
+			return nil, err
+		}
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, ErrMalformedPOSTRequest
+			return nil, nestError(ErrMalformedPOSTRequest, "parse multipart form: %w", err)
 		}
 		data, err := v2.verifyPost(r.Context(), form)
 		if err != nil {
 			return nil, err
 		}
 		return newV2VerifiedRequestWithForm(file, data, form)
-	} else if r.Header.Get(headerAuthorization) != "" {
-		data, err := v2.verify(r, virtualHostedBucket)
+	case r.Header.Get(headerAuthorization) != "":
+		data, err := v2.verify(r, query, virtualHostedBucket)
 		if err != nil {
 			return nil, err
 		}
 		return newV2VerifiedRequest(r.Body, data)
-	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
+	case query.Has(queryAWSAccessKeyId):
 		data, err := v2.verifyPresigned(r, query, virtualHostedBucket)
 		if err != nil {
 			return nil, err

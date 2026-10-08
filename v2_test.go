@@ -33,6 +33,25 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
+	t.Run("X-Amz-Date overrides Date", func(t *testing.T) {
+		const amzDate = "Fri, 24 May 2013 00:00:00 GMT"
+		// The positional Date line is empty; X-Amz-Date is a canonical header.
+		signature := calculateSignatureV2("GET\n\n\n\nx-amz-date:"+amzDate+"\n/bucket/key", provider.secretAccessKey)
+		for _, date := range []string{"", "Thu, 23 May 2013 00:00:00 GMT", "invalid date"} {
+			t.Run(date, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "https://s3.amazonaws.com/bucket/key", nil)
+				req.Header.Set("X-Amz-Date", amzDate)
+				if date != "" {
+					req.Header.Set("Date", date)
+				}
+				req.Header.Set("Authorization", "AWS "+accessKeyID+":"+signature.String())
+				v2 := newV2(provider, dummyNow(2013, time.May, 24, 0, 0, 0))
+				vr, err := v2.Verify(req, "")
+				assert.NoError(t, err)
+				assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
+			})
+		}
+	})
 	t.Run("Object GET", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/photos/puppy.jpg", nil)
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:36:42 +0000")

@@ -85,7 +85,7 @@ func Example() {
 		// (6) Read the body. Notes:
 		//
 		// - requested checksums are verified automatically
-		// - if the request includes a trailing checksum header, at least one checksum must be requested
+		// - a trailing checksum is verified using the algorithm named by x-amz-trailer
 		// - if not explicitly requested:
 		//   - MD5 is always computed and available after reading
 		//   - SHA256 is computed and available after reading, depending on the request type

@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,14 +300,14 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 
 		_, _, err := parseMultipartFormUntilFile(body, boundary)
 		assert.Error(t, err)
-		assert.That(t, errors.Is(err, errMessageTooLarge))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
 	})
 	t.Run("form above limit with bogus boundary", func(t *testing.T) {
 		_, _, body, _ := newMultipart(1000, "image.jpg", 1000)
 
 		_, _, err := parseMultipartFormUntilFile(body, "bogus")
 		assert.Error(t, err)
-		assert.That(t, errors.Is(err, errMessageTooLarge))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
 	})
 }
 
@@ -338,5 +339,37 @@ func (p simpleCredentialsProvider) Provide(_ context.Context, accessKeyID string
 func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time { //nolint:revive
 	return func() time.Time {
 		return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
+	}
+}
+
+func TestMultipartFileNameCase(t *testing.T) {
+	for _, name := range []string{"file", "File", "FILE", "fIlE"} {
+		t.Run(name, func(t *testing.T) {
+			var body bytes.Buffer
+			mw := multipart.NewWriter(&body)
+			part, err := mw.CreateFormFile(name, "test.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := strings.Repeat("Z", 21000)
+			if _, err = io.WriteString(part, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err = mw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			file, form, err := parseMultipartFormUntilFile(&body, mw.Boundary())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { assert.NoError(t, file.Close()) }()
+			got, err := io.ReadAll(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != payload || form.FileName() != "test.txt" {
+				t.Fatal("incorrect file content or filename")
+			}
+		})
 	}
 }
