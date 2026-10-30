@@ -54,6 +54,9 @@ var (
 	ErrInvalidXAmzDecodedContentLength = errors.New("the x-amz-decoded-content-length header does not contain a valid integer")
 	// ErrMalformedPOSTRequest indicates that a POST request is malformed.
 	ErrMalformedPOSTRequest = errors.New("unable to parse multipart form data")
+	// ErrMalformedTrailer indicates that the trailing headers of a request are not well-formed or
+	// do not match the trailing checksum that was requested.
+	ErrMalformedTrailer = errors.New("the request contained trailing data that was not well-formed or did not conform to our published schema")
 	// ErrMissingContentLength indicates the MissingContentLength error code.
 	ErrMissingContentLength = errors.New("you must provide the Content-Length HTTP header")
 	// ErrMissingPOSTFile indicates that a POST request is missing a required file upload.

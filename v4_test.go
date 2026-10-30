@@ -2,7 +2,9 @@ package awsig
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -266,6 +268,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			body.WriteString("0;chunk-signature=2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992\r\n")
 			body.WriteString("x-amz-checksum-crc32c:sOO8/Q==\r\n")
 			body.WriteString("x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n")
+			body.WriteString("\r\n")
 
 			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -275,7 +278,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			req.Header.Add("Content-Encoding", "aws-chunked")
 			req.Header.Add("x-amz-decoded-content-length", "66560")
 			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
-			req.Header.Add("Content-Length", "66824")
+			req.Header.Add("Content-Length", "66946")
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
@@ -347,6 +350,403 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 				AlgorithmCRC32: {0xb3, 0x74, 0x85, 0x09},
 				AlgorithmMD5:   {0xdd, 0x1b, 0x90, 0x4c, 0x0c, 0x06, 0xf8, 0x01, 0x56, 0xc1, 0x38, 0x10, 0xa0, 0x4d, 0xbb, 0x94},
 			}, checksums)
+		})
+	})
+	t.Run("malformed trailing headers", func(t *testing.T) {
+		const minChunkSize = 8192
+		chunk := bytes.Repeat([]byte{'a'}, minChunkSize)
+
+		var buf bytes.Buffer
+		for _, size := range []int{minChunkSize, minChunkSize, minChunkSize / 8} {
+			fmt.Fprintf(&buf, "%x\r\n", size)
+			buf.Write(chunk[:size])
+			buf.WriteString("\r\n")
+		}
+		buf.WriteString("0\r\n")
+		bodyNoTrailer := buf.Bytes()
+
+		newUnsignedTrailerRequest := func(trailer string) *http.Request {
+			body := io.MultiReader(
+				bytes.NewReader(bodyNoTrailer),
+				strings.NewReader(trailer),
+			)
+			req := httptest.NewRequest(http.MethodPut, "https://amzn-s3-demo-bucket.s3.amazonaws.com/Key+", body)
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", "17408")
+			req.Header.Add("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32")
+			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer,Signature=8fdf2b7a7005b82789d2a9cec832705457298e8a6a908f8c85f17e44c707aa64")
+			req.Header.Add("Content-Length", strconv.Itoa(len(bodyNoTrailer)+len(trailer)))
+			req.Header.Add("x-amz-date", "20130524T000000Z")
+			return req
+		}
+
+		readAll := func(t *testing.T, req *http.Request, algo ChecksumAlgorithm) error {
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			cr, err := NewTrailingChecksumRequest(algo)
+			assert.NoError(t, err)
+
+			r, err := vr.Reader(cr)
+			assert.NoError(t, err)
+
+			_, err = io.ReadAll(r)
+			return err
+		}
+
+		const (
+			checksumHeader      = "x-amz-checksum-crc32:s3SFCQ==\r\n"
+			wrongChecksumHeader = "x-amz-checksum-crc32:AAAAAA==\r\n"
+		)
+
+		for _, tt := range []struct {
+			name        string
+			trailer     string
+			expectedErr error
+		}{
+			{
+				name:    "valid",
+				trailer: checksumHeader + "\r\n",
+			},
+			{
+				name:        "wrong digest",
+				trailer:     wrongChecksumHeader + "\r\n",
+				expectedErr: ErrBadDigest,
+			},
+			{
+				name:        "undeclared header",
+				trailer:     "foo:bar\r\n\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "checksum algorithm mismatch",
+				trailer:     "x-amz-checksum-sha256:pBELPefrHbQNv8FIDKm0K0FR1slpg/ujR9x6iXTIGwY=\r\n\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "invalid value",
+				trailer:     "x-amz-checksum-crc32:!!!\r\n\r\n",
+				expectedErr: ErrInvalidDigest,
+			},
+			{
+				name:        "no trailer",
+				trailer:     "",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "empty trailer",
+				trailer:     "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "whitespace-only line before header",
+				trailer:     "\n\r\n" + checksumHeader + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "missing terminator",
+				trailer:     checksumHeader,
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "extra header",
+				trailer:     checksumHeader + "foo:bar\r\n\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "line without colon",
+				trailer:     "foo\r\n\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "line too long",
+				trailer:     "foo:" + strings.Repeat("a", 200) + "\r\n\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "header line ends in bare LF",
+				trailer:     "x-amz-checksum-crc32:s3SFCQ==\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "whitespace-only line after header",
+				trailer:     checksumHeader + "\n\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:    "header line ends in LF CRLF",
+				trailer: "x-amz-checksum-crc32:s3SFCQ==\n\r\n\r\n",
+			},
+			{
+				name:    "ignored bytes after terminator",
+				trailer: checksumHeader + "\r\nfoo",
+			},
+			{
+				name:    "uppercase header name",
+				trailer: "X-Amz-Checksum-CRC32:s3SFCQ==\r\n\r\n",
+			},
+			{
+				name:    "whitespace around colon",
+				trailer: "x-amz-checksum-crc32 : s3SFCQ==\r\n\r\n",
+			},
+		} {
+			t.Run("unsigned/"+tt.name, func(t *testing.T) {
+				err := readAll(t, newUnsignedTrailerRequest(tt.trailer), AlgorithmCRC32)
+				if tt.expectedErr == nil {
+					assert.NoError(t, err)
+				} else {
+					assert.That(t, errors.Is(err, tt.expectedErr))
+				}
+			})
+		}
+
+		const (
+			finalChunkSignature = "2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992"
+			secretAccessKey     = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+		)
+		var signedBody bytes.Buffer
+		signedBody.WriteString("10000;chunk-signature=b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2\r\n")
+		signedBody.Write(bytes.Repeat([]byte{'a'}, 65536))
+		signedBody.WriteString("\r\n400;chunk-signature=1c1344b170168f8e65b41376b44b20fe354e373826ccbbe2c1d40a8cae51e5c7\r\n")
+		signedBody.Write(bytes.Repeat([]byte{'a'}, 1024))
+		signedBody.WriteString("\r\n0;chunk-signature=" + finalChunkSignature + "\r\n")
+
+		newSignedTrailerRequest := func(trailer string) *http.Request {
+			body := io.MultiReader(
+				bytes.NewReader(signedBody.Bytes()),
+				strings.NewReader(trailer),
+			)
+			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
+			req.Header.Add("x-amz-date", "20130524T000000Z")
+			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class;x-amz-trailer,Signature=106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e")
+			req.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER")
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", "66560")
+			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
+			req.Header.Add("Content-Length", strconv.Itoa(signedBody.Len()+len(trailer)))
+			return req
+		}
+
+		signatureTrailer := func(canonicalHeaders string) string {
+			previous, err := newSignatureV4FromEncoded([]byte(finalChunkSignature))
+			assert.NoError(t, err)
+			digest := sha256.Sum256([]byte(canonicalHeaders))
+			return "x-amz-trailer-signature:" + calculateSignatureV4(signatureV4Data{
+				algorithm:       algorithmHMACSHA256,
+				algorithmSuffix: algorithmSuffixTrailer,
+				dateTime:        "20130524T000000Z",
+				scope:           scope{date: "20130524", region: testDefaultRegion, service: testDefaultService},
+				previous:        previous,
+				digest:          digest[:],
+			}, secretAccessKey).String() + "\r\n"
+		}
+
+		canon := func(headerLine string) string {
+			return strings.ReplaceAll(headerLine, "\r\n", "\n")
+		}
+
+		const (
+			validChecksum    = "x-amz-checksum-crc32c:sOO8/Q==\r\n"
+			wrongChecksum    = "x-amz-checksum-crc32c:AAAAAA==\r\n"
+			undeclaredHeader = "foo:bar\r\n"
+		)
+		var (
+			validSignature = signatureTrailer(canon(validChecksum))
+			badSignature   = "x-amz-trailer-signature:" + testBogusSignatureV4 + "\r\n"
+		)
+
+		for _, tt := range []struct {
+			name        string
+			trailer     string
+			expectedErr error
+		}{
+			{
+				name:    "valid",
+				trailer: validChecksum + validSignature + "\r\n",
+			},
+			{
+				name:        "bad signature",
+				trailer:     validChecksum + badSignature + "\r\n",
+				expectedErr: ErrSignatureDoesNotMatch,
+			},
+			{
+				name:        "wrong digest",
+				trailer:     wrongChecksum + signatureTrailer(canon(wrongChecksum)) + "\r\n",
+				expectedErr: ErrBadDigest,
+			},
+			{
+				name:        "undeclared header",
+				trailer:     undeclaredHeader + signatureTrailer(canon(undeclaredHeader)) + "\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name: "checksum algorithm mismatch",
+				trailer: "x-amz-checksum-sha256:pBELPefrHbQNv8FIDKm0K0FR1slpg/ujR9x6iXTIGwY=\r\n" +
+					signatureTrailer("x-amz-checksum-sha256:pBELPefrHbQNv8FIDKm0K0FR1slpg/ujR9x6iXTIGwY=\n") +
+					"\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "invalid value",
+				trailer:     "x-amz-checksum-crc32c:!!!\r\n" + signatureTrailer("x-amz-checksum-crc32c:!!!\n") + "\r\n",
+				expectedErr: ErrInvalidDigest,
+			},
+			{
+				name:        "no trailer",
+				trailer:     "",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "truncated signature",
+				trailer:     validChecksum + validSignature[:40],
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "malformed signature",
+				trailer:     validChecksum + "x-amz-trailer-signature:abc\r\n\r\n",
+				expectedErr: ErrInvalidSignature,
+			},
+			{
+				name:        "missing terminator",
+				trailer:     validChecksum + validSignature,
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "bytes after signature instead of terminator",
+				trailer:     validChecksum + validSignature + "foo",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "line too long",
+				trailer:     "foo:" + strings.Repeat("a", 200) + "\r\n" + badSignature,
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:    "longest valid header line",
+				trailer: " x-amz-checksum-crc32c : sOO8/Q== \r\n" + validSignature + "\r\n",
+			},
+			{
+				name:        "header line one byte too long",
+				trailer:     " x-amz-checksum-crc32c :  sOO8/Q== \r\n" + validSignature + "\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:    "longest valid signature line",
+				trailer: validChecksum + " " + strings.Replace(strings.TrimSuffix(validSignature, "\r\n"), ":", " : ", 1) + " \r\n\r\n",
+			},
+			{
+				name:        "signature line one byte too long",
+				trailer:     validChecksum + " " + strings.Replace(strings.TrimSuffix(validSignature, "\r\n"), ":", " :  ", 1) + " \r\n\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "header line ends in bare LF",
+				trailer:     "x-amz-checksum-crc32c:sOO8/Q==\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "whitespace-only line before signature",
+				trailer:     validChecksum + "\n\r\n" + validSignature + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				// Not only is this case supported by S3's undocumented support for whitespace around
+				// header keys and values, but support for it is explicitly declared in S3's docs.
+				// https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html#trailing-checksums-trailer-chunk-format
+				name:    "header line ends in LF CRLF",
+				trailer: "x-amz-checksum-crc32c:sOO8/Q==\n\r\n" + validSignature + "\r\n",
+			},
+			{
+				name:        "signature without header",
+				trailer:     badSignature + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "header without signature",
+				trailer:     validChecksum + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "header after signature",
+				trailer:     validChecksum + validSignature + undeclaredHeader + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:        "second signature",
+				trailer:     validChecksum + validSignature + badSignature + "\r\n",
+				expectedErr: io.ErrUnexpectedEOF,
+			},
+			{
+				name:    "ignored bytes after terminator",
+				trailer: validChecksum + validSignature + "\r\nfoo",
+			},
+			{
+				name: "uppercase header names",
+				trailer: "X-Amz-Checksum-CRC32C:sOO8/Q==\r\n" +
+					strings.Replace(validSignature, "x-amz-trailer-signature", "X-Amz-Trailer-Signature", 1) +
+					"\r\n",
+			},
+			{
+				name:    "whitespace around colon",
+				trailer: "x-amz-checksum-crc32c : sOO8/Q==\r\n" + strings.Replace(validSignature, ":", " : ", 1) + "\r\n",
+			},
+			// S3 verifies the signature first and supports multiple trailing headers, always
+			// returning ErrSignatureDoesNotMatch for bad signatures. However, we validate
+			// trailing headers before signatures, resulting in different errors.
+			{
+				name:        "bad signature with undeclared header",
+				trailer:     undeclaredHeader + badSignature + "\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+			{
+				name:        "bad signature with invalid value",
+				trailer:     "x-amz-checksum-crc32c:!!!\r\n" + badSignature + "\r\n",
+				expectedErr: ErrInvalidDigest,
+			},
+			{
+				name:        "bad signature with multiple headers",
+				trailer:     validChecksum + undeclaredHeader + badSignature + "\r\n",
+				expectedErr: ErrMalformedTrailer,
+			},
+		} {
+			t.Run("signed/"+tt.name, func(t *testing.T) {
+				err := readAll(t, newSignedTrailerRequest(tt.trailer), AlgorithmCRC32C)
+				if tt.expectedErr == nil {
+					assert.NoError(t, err)
+				} else {
+					assert.That(t, errors.Is(err, tt.expectedErr))
+				}
+			})
+		}
+
+		t.Run("trailer payload without requested trailing checksum", func(t *testing.T) {
+			vr, err := v4.Verify(newUnsignedTrailerRequest("x-amz-checksum-crc32:s3SFCQ==\r\n\r\n"), "")
+			assert.NoError(t, err)
+
+			_, err = vr.Reader()
+			assert.That(t, err != nil && !errors.Is(err, ErrMalformedTrailer))
+		})
+
+		t.Run("trailing checksum requested without trailer payload", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", nil)
+			req.Header.Add("x-amz-date", "20130524T000000Z")
+			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class,Signature=4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
+			req.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", "66560")
+			req.Header.Add("Content-Length", "66824")
+
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
+			assert.NoError(t, err)
+
+			_, err = vr.Reader(cr)
+			assert.That(t, err != nil && !errors.Is(err, ErrMalformedTrailer))
 		})
 	})
 	t.Run("presigned", func(t *testing.T) {

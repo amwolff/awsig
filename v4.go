@@ -51,10 +51,25 @@ const (
 	chunkMinLength               = 8000       // 8 KB
 	chunkSignaturePrefix         = "chunk-signature="
 	chunkTrailingHeaderPrefix    = "x-amz-checksum-"
-	chunkTrailingSignaturePrefix = "x-amz-trailer-signature:"
+	chunkTrailingSignatureHeader = "x-amz-trailer-signature"
 
-	cr = '\r'
-	lf = '\n'
+	// chunkTrailingWhitespaceMaxLength is the maximum number of whitespace bytes we allow in a
+	// trailing header line. It accommodates one byte of whitespace on each side of the header key
+	// and one on each side of the header value. This is sufficient for the "value\n\r\n" line
+	// ending that S3 supports.
+	// https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html#trailing-checksums-trailer-chunk-format
+	//
+	// Note that S3 accepts any amount of whitespace.
+	chunkTrailingWhitespaceMaxLength = 4
+
+	// chunkTrailingSignatureLineMaxLength is the maximum length of the trailer signature line,
+	// including its colon, allowed whitespace, and terminator (CRLF).
+	chunkTrailingSignatureLineMaxLength = len(chunkTrailingSignatureHeader) + 1 +
+		signatureV4EncodedLength + chunkTrailingWhitespaceMaxLength + len(crlf)
+
+	cr   = '\r'
+	lf   = '\n'
+	crlf = "\r\n"
 )
 
 type v4Reader struct {
@@ -217,73 +232,186 @@ func (r *v4Reader) currentChunkSignatureData() signatureV4Data {
 	}
 }
 
+// cutChunkTrailerLine splits the first CRLF-terminated line from data, returning
+// the line without its terminator and the remaining bytes.
+//
+// If data exceeds maxLength (which includes the CRLF) without a CRLF, or if the
+// line is not properly terminated by CRLF, an error is returned.
+func cutChunkTrailerLine(data []byte, maxLength int) (line, rest []byte, err error) {
+	window := data[:min(len(data), maxLength)]
+
+	i := bytes.Index(window, []byte(crlf))
+	if i < 0 {
+		if len(window) == maxLength {
+			return nil, nil, nestError(ErrMalformedTrailer, "trailing header line is too long")
+		}
+		return nil, nil, nestError(io.ErrUnexpectedEOF, "trailing header line is not terminated by CRLF")
+	}
+
+	return data[:i], data[i+len(crlf):], nil
+}
+
+// parseChunkTrailerHeader splits a trailing header line into its name and value.
+// It trims surrounding whitespace from both parts. If the line does not contain
+// a colon, an error is returned.
+func parseChunkTrailerHeader(line []byte) (name, value []byte, err error) {
+	before, after, ok := bytes.Cut(line, []byte{':'})
+	if !ok {
+		return nil, nil, nestError(ErrMalformedTrailer, "trailing header line has no colon")
+	}
+	return bytes.TrimSpace(before), bytes.TrimSpace(after), nil
+}
+
+// readChunkTrailer reads and validates the trailer chunk contained within the provided buffer.
+//
+// The chunk must consist of the following parts in order:
+//   - Exactly one trailing header, which is the checksum header corresponding to the algorithm
+//     of the trailing checksum request.
+//   - The trailer signature for signed payloads.
+//   - The CRLF terminating the chunk, which follows the trailer signature line for signed payloads
+//     and the trailing header line for unsigned payloads. Anything after it is ignored.
+//
+// We intentionally diverge from S3 in the following ways in order to impose a strict bound on the
+// amount of data read and to avoid unnecessary work:
+//   - S3 accepts any number of trailing headers before the signature line, signs them in sorted
+//     order, and verifies the signature before rejecting undeclared trailing headers. We only
+//     support a single trailing header, and we return ErrMalformedTrailer as soon as a second
+//     header line that isn't the trailer signature appears. As a result, a bad signature accompanied
+//     by an extra header is reported as ErrMalformedTrailer instead of ErrSignatureDoesNotMatch.
+//   - For a trailing header line that is too long to be valid, we return ErrMalformedTrailer
+//     immediately instead of ErrSignatureDoesNotMatch.
+//   - S3 verifies the signature before it validates the trailing headers' names and values. We
+//     validate the trailing header first, so that we don't compute a signature for a trailer that
+//     we're going to reject anyway. As a result, a bad signature accompanied by an undeclared
+//     header or an invalid value is reported as ErrMalformedTrailer or ErrInvalidDigest instead of
+//     ErrSignatureDoesNotMatch.
+//   - S3 trims any amount of whitespace (including a LF, CR, or tab, and excluding the protocol-
+//     significant sequence CRLF) from around a trailing header's key and value. We, however, accept
+//     at most chunkTrailingWhitespaceMaxLength bytes of whitespace per line to strictly limit the
+//     amount of bytes we read.
+//
+// Like S3, we ignore any bytes following the CRLF that terminates the chunk. (For requests without
+// a trailer, which are not handled here, such bytes are rejected.)
 func (r *v4Reader) readChunkTrailer(buf []byte) error {
-	name := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String() + ":"
+	expectedName := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String()
 
-	length := len(name)
-	length += r.trailingSumAlgo.base64Length()
+	// The maximum length of a trailing header line includes the header name, colon, header value,
+	// allowed whitespace, and CRLF.
+	headerLineMaxLength := len(expectedName) + 1 + r.trailingSumAlgo.base64Length() +
+		chunkTrailingWhitespaceMaxLength + len(crlf)
+	trailerMaxLength := headerLineMaxLength + len(crlf)
+	if !r.unsigned {
+		trailerMaxLength += chunkTrailingSignatureLineMaxLength
+	}
 
-	buf, err := reuseBuffer(buf, length+1) // +1 for the trailing LF
+	buf, err := reuseBuffer(buf, trailerMaxLength)
 	if err != nil {
 		return err
 	}
 
-	if _, err = io.ReadFull(r.r, buf); err != nil {
+	// Read up to the maximum possible length of a valid trailer here because the trailer chunk's
+	// length isn't known upfront. This is safe because any data after the trailer's CRLF is ignored.
+	//
+	// Valid trailers are usually shorter than our buffer, and this causes io.ReadFull to return
+	// io.ErrUnexpectedEOF after a partial read. Therefore, don't treat io.ErrUnexpectedEOF as
+	// a failure; allow the parsing logic below to determine whether the bytes we read form a
+	// valid trailer.
+	n, err := io.ReadFull(r.r, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		if errors.Is(err, io.EOF) {
+			return nestError(io.ErrUnexpectedEOF, "trailer is missing")
+		}
 		return err
 	}
+	buf = buf[:n]
 
-	if !bytes.HasPrefix(buf, []byte(name)) {
-		return ErrInvalidRequest
+	// Account for the possibility of a signed trailer omitting its trailing header.
+	// In such a case, the first line is the signature line.
+	firstLineMaxLength := headerLineMaxLength
+	if !r.unsigned {
+		firstLineMaxLength = max(firstLineMaxLength, chunkTrailingSignatureLineMaxLength)
 	}
 
-	if err = r.integrity.setEncoded(r.trailingSumAlgo, buf[len(name):len(buf)-1]); err != nil {
+	line, buf, err := cutChunkTrailerLine(buf, firstLineMaxLength)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		if r.unsigned {
+			return nestError(io.ErrUnexpectedEOF, "trailer ended before the trailing header")
+		}
+		return nestError(io.ErrUnexpectedEOF, "trailer ended before the trailer signature")
+	}
+
+	name, value, err := parseChunkTrailerHeader(line)
+	if err != nil {
+		return err
+	}
+	if !r.unsigned && strings.EqualFold(string(name), chunkTrailingSignatureHeader) {
+		return nestError(io.ErrUnexpectedEOF, "trailer signature was not preceded by a trailing header")
+	}
+
+	if len(line)+len(crlf) > headerLineMaxLength {
+		return nestError(ErrMalformedTrailer, "trailing header line is too long")
+	}
+	if !strings.EqualFold(string(name), expectedName) {
+		return nestError(ErrMalformedTrailer, "expected trailing header %q", expectedName)
+	}
+	if err = r.integrity.setEncoded(r.trailingSumAlgo, value); err != nil {
 		return ErrInvalidDigest
 	}
 
-	var (
-		trailingByte = buf[len(buf)-1]
-		trailingHash []byte
-	)
-
-	if !r.unsigned {
-		buf[len(buf)-1] = lf
-		trailingHash = sha256Hash(buf)
+	if r.unsigned {
+		if len(buf) < len(crlf) {
+			return nestError(io.ErrUnexpectedEOF, "trailer is not terminated")
+		}
+		if !bytes.HasPrefix(buf, []byte(crlf)) {
+			return nestError(io.ErrUnexpectedEOF, "unexpected data after trailing header")
+		}
+		return nil
 	}
 
-	switch trailingByte {
-	case cr:
-		if err = r.consumeLF(buf); err != nil {
-			return err
-		}
-	case lf:
-		if err = r.consumeCRLF(buf); err != nil {
-			return err
-		}
-	default:
-		return ErrInvalidRequest
+	canonical := newHashBuilder(sha256.New)
+	canonical.WriteString(expectedName)
+	canonical.WriteByte(':')
+	canonical.Write(value)
+	canonical.WriteByte(lf)
+
+	line, buf, err = cutChunkTrailerLine(buf, chunkTrailingSignatureLineMaxLength)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		return nestError(io.ErrUnexpectedEOF, "trailer ended before the trailer signature")
 	}
 
-	if !r.unsigned {
-		expected, err := r.readChunkSignature(chunkTrailingSignaturePrefix, buf)
-		if err != nil {
-			return err
-		}
+	name, value, err = parseChunkTrailerHeader(line)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(string(name), chunkTrailingSignatureHeader) {
+		return nestError(ErrMalformedTrailer, "multiple trailing headers are not supported")
+	}
 
-		signature := calculateSignatureV4(signatureV4Data{
-			algorithm:       r.signingAlgo,
-			algorithmSuffix: algorithmSuffixTrailer,
-			dateTime:        r.dateTime,
-			scope:           r.scope,
-			previous:        r.chunkPreviousSignature,
-			digest:          trailingHash,
-		}, r.secretAccessKey)
-		if !expected.compare(signature) {
-			return ErrSignatureDoesNotMatch
-		}
-	} else {
-		if err = r.consumeCRLF(buf); err != nil {
-			return err
-		}
+	expected, err := newSignatureV4FromEncoded(value)
+	if err != nil {
+		return err
+	}
+
+	signature := calculateSignatureV4(signatureV4Data{
+		algorithm:       r.signingAlgo,
+		algorithmSuffix: algorithmSuffixTrailer,
+		dateTime:        r.dateTime,
+		scope:           r.scope,
+		previous:        r.chunkPreviousSignature,
+		digest:          canonical.Sum(),
+	}, r.secretAccessKey)
+	if !expected.compare(signature) {
+		return ErrSignatureDoesNotMatch
+	}
+
+	if !bytes.HasPrefix(buf, []byte(crlf)) {
+		return nestError(io.ErrUnexpectedEOF, "trailer is not terminated by CRLF")
 	}
 
 	return nil
@@ -309,9 +437,7 @@ func (r *v4Reader) close(buf []byte) error {
 			}
 			return err
 		}
-	}
-
-	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
+	} else if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
 		return ErrInvalidRequest
 	}
 
