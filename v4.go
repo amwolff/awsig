@@ -48,7 +48,7 @@ const (
 
 	chunkMaxLengthEncoded        = "140000000"
 	chunkMaxLength               = 5368709120 // 5 GiB
-	chunkMinLength               = 8000       // 8 KB
+	chunkMinLength               = 8192       // 8 KiB
 	chunkSignaturePrefix         = "chunk-signature="
 	chunkTrailingHeaderPrefix    = "x-amz-checksum-"
 	chunkTrailingSignatureHeader = "x-amz-trailer-signature"
@@ -490,7 +490,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 			return 0, ErrEntityTooLarge
 		}
 		if length < chunkMinLength && r.decodedContentLength > length {
-			return 0, ErrEntityTooSmall
+			return 0, withLegacy(ErrInvalidChunkSize, ErrEntityTooSmall)
 		}
 	}
 
@@ -772,11 +772,11 @@ type parsedCredential struct {
 	scope       scope
 }
 
-func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool) (parsedCredential, error) {
+func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool, malformed error) (parsedCredential, error) {
 	if !skipPrefixCheck {
 		if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
 			return parsedCredential{}, nestError(
-				ErrAuthorizationHeaderMalformed,
+				malformed,
 				"the Credential parameter is missing",
 			)
 		}
@@ -787,7 +787,7 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 
 	if len(parts) != 5 {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain necessary parts",
 		)
 	}
@@ -797,35 +797,35 @@ func (v4 *V4[T]) parseCredential(rawCredential string, expectedDate time.Time, s
 	date, err := time.Parse(timeFormatYYYYMMDD, parts[1])
 	if err != nil {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain a valid date: %w", err,
 		)
 	}
 
 	if date.Year() != expectedDate.Year() || date.Month() != expectedDate.Month() || date.Day() != expectedDate.Day() {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected date",
 		)
 	}
 
 	if !v4.config.SkipRegionVerification && parts[2] != v4.config.Region {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected region",
 		)
 	}
 
 	if parts[3] != v4.config.Service {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected service",
 		)
 	}
 
 	if parts[4] != v4AuthorizationHeaderCredentialTerminator {
 		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
+			malformed,
 			"the Credential parameter does not contain the expected terminator",
 		)
 	}
@@ -898,18 +898,18 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 		}
 		if strings.EqualFold(key, headerContentMD5) {
 			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
-				return nil, nestError(
-					ErrMissingSecurityHeader,
+				return nil, withLegacy(nestError(
+					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", headerContentMD5,
-				)
+				), ErrMissingSecurityHeader)
 			}
 		}
 		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
 			if _, ok := signedHeadersLookup[k]; !ok {
-				return nil, nestError(
-					ErrMissingSecurityHeader,
+				return nil, withLegacy(nestError(
+					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", k,
-				)
+				), ErrMissingSecurityHeader)
 			}
 		}
 	}
@@ -970,7 +970,7 @@ func (v4 *V4[T]) parseAuthorization(rawAuthorization string, expectedDate time.T
 		)
 	}
 
-	credential, err := v4.parseCredential(pairs[0], expectedDate, false)
+	credential, err := v4.parseCredential(pairs[0], expectedDate, false, ErrAuthorizationHeaderMalformed)
 	if err != nil {
 		return v4ParsedAuthorization{}, err
 	}
@@ -999,9 +999,9 @@ func (v4 *V4[T]) parseAuthorizationFromQuery(query url.Values, expectedDate time
 		return v4ParsedAuthorization{}, err
 	}
 
-	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true)
+	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true, ErrAuthorizationQueryParametersError)
 	if err != nil {
-		return v4ParsedAuthorization{}, err
+		return v4ParsedAuthorization{}, withLegacy(err, ErrAuthorizationHeaderMalformed)
 	}
 
 	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true)
@@ -1217,7 +1217,7 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 		return v4VerifiedData[T]{}, err
 	}
 
-	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true)
+	credential, err := v4.parseCredential(form.Get(queryXAmzCredential).Value, parsedDateTime, true, ErrAuthorizationHeaderMalformed)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}

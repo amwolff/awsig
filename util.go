@@ -19,6 +19,8 @@ var (
 	ErrAccessDenied = errors.New("access denied")
 	// ErrAuthorizationHeaderMalformed indicates the AuthorizationHeaderMalformed error code.
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
+	// ErrAuthorizationQueryParametersError indicates the AuthorizationQueryParametersError error code.
+	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
 	// ErrBadDigest indicates the BadDigest error code.
 	ErrBadDigest = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
 	// ErrContentLengthWithTransferEncoding indicates that both the Content-Length and Transfer-Encoding headers were provided.
@@ -31,6 +33,8 @@ var (
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
 	// ErrInvalidArgument indicates the InvalidArgument error code.
 	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrInvalidChunkSize indicates the InvalidChunkSizeError error code.
+	ErrInvalidChunkSize = errors.New("only the last chunk is allowed to have a size less than 8192 bytes")
 	// ErrInvalidDateHeader indicates that the Date or X-Amz-Date header is not valid.
 	ErrInvalidDateHeader = errors.New("AWS authentication requires a valid Date or x-amz-date header")
 	// ErrInvalidDigest indicates the InvalidDigest error code.
@@ -79,6 +83,9 @@ var (
 	ErrRequestTimeTooSkewed = errors.New("the difference between the request time and the server's time is too large")
 	// ErrSignatureDoesNotMatch indicates the SignatureDoesNotMatch error code.
 	ErrSignatureDoesNotMatch = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrUnsignedHeader indicates that the request contains headers that must be signed but were not.
+	// AWS reports this as AccessDenied.
+	ErrUnsignedHeader = errors.New("there were headers present in the request which were not signed")
 	// ErrUnsupportedSignature indicates the UnsupportedSignature error code.
 	ErrUnsupportedSignature = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
 )
@@ -266,6 +273,25 @@ func (e *nestedError) Is(target error) bool {
 		return true
 	}
 	return errors.Is(e.inner, target)
+}
+
+// legacyError is an error that also matches the error callers checked for before it was added, so
+// that callers that don't know it keep their answer.
+type legacyError struct {
+	err    error
+	legacy error
+}
+
+func (e *legacyError) Error() string {
+	return e.err.Error()
+}
+
+func (e *legacyError) Unwrap() []error {
+	return []error{e.err, e.legacy}
+}
+
+func withLegacy(err, legacy error) error {
+	return &legacyError{err: err, legacy: legacy}
 }
 
 func nestError(outer error, format string, a ...any) *nestedError {
