@@ -67,6 +67,11 @@ const (
 	chunkTrailingSignatureLineMaxLength = len(chunkTrailingSignatureHeader) + 1 +
 		signatureV4EncodedLength + chunkTrailingWhitespaceMaxLength + len(crlf)
 
+	// chunkTrailerMaxLength bounds the length of a signed trailer with any checksum algorithm. It
+	// combines the longest algorithm name with the longest checksum.
+	chunkTrailerMaxLength = len(chunkTrailingHeaderPrefix) + len("crc64nvme") + 1 + (sha256.Size+2)/3*4 +
+		chunkTrailingWhitespaceMaxLength + 2*len(crlf) + chunkTrailingSignatureLineMaxLength
+
 	cr   = '\r'
 	lf   = '\n'
 	crlf = "\r\n"
@@ -89,6 +94,9 @@ type v4Reader struct {
 	integrity            expectedIntegrity
 	decodedContentLength int64
 
+	// metadata holds chunk metadata and the trailer, so that they can be read whatever the size
+	// of the caller's buffer.
+	metadata               [max(chunkTrailerMaxLength, len(chunkSignaturePrefix)+signatureV4EncodedLength)]byte
 	chunkCount             int
 	chunkBytesLeft         int64
 	chunkSHA256            hash.Hash
@@ -262,6 +270,20 @@ func parseChunkTrailerHeader(line []byte) (name, value []byte, err error) {
 	return bytes.TrimSpace(before), bytes.TrimSpace(after), nil
 }
 
+// chunkTrailerMaxLengths returns the maximum lengths of the trailing header line and of the
+// trailer chunk for algo.
+func chunkTrailerMaxLengths(algo ChecksumAlgorithm, unsigned bool) (headerLine, trailer int) {
+	// The maximum length of a trailing header line includes the header name, colon, header value,
+	// allowed whitespace, and CRLF.
+	headerLine = len(chunkTrailingHeaderPrefix) + len(algo.String()) + 1 + algo.base64Length() +
+		chunkTrailingWhitespaceMaxLength + len(crlf)
+	trailer = headerLine + len(crlf)
+	if !unsigned {
+		trailer += chunkTrailingSignatureLineMaxLength
+	}
+	return headerLine, trailer
+}
+
 // readChunkTrailer reads and validates the trailer chunk contained within the provided buffer.
 //
 // The chunk must consist of the following parts in order:
@@ -295,14 +317,7 @@ func parseChunkTrailerHeader(line []byte) (name, value []byte, err error) {
 func (r *v4Reader) readChunkTrailer(buf []byte) error {
 	expectedName := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String()
 
-	// The maximum length of a trailing header line includes the header name, colon, header value,
-	// allowed whitespace, and CRLF.
-	headerLineMaxLength := len(expectedName) + 1 + r.trailingSumAlgo.base64Length() +
-		chunkTrailingWhitespaceMaxLength + len(crlf)
-	trailerMaxLength := headerLineMaxLength + len(crlf)
-	if !r.unsigned {
-		trailerMaxLength += chunkTrailingSignatureLineMaxLength
-	}
+	headerLineMaxLength, trailerMaxLength := chunkTrailerMaxLengths(r.trailingSumAlgo, r.unsigned)
 
 	buf, err := reuseBuffer(buf, trailerMaxLength)
 	if err != nil {
@@ -459,8 +474,9 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	if r.chunkBytesLeft == 0 {
+		buf := r.metadata[:]
 		if r.chunkCount > 0 {
-			if err = r.consumeCRLF(p); err != nil {
+			if err = r.consumeCRLF(buf); err != nil {
 				if errors.Is(err, io.EOF) {
 					return n, io.ErrUnexpectedEOF
 				}
@@ -468,7 +484,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 			}
 		}
 
-		length, signature, err := r.readChunkMeta(p)
+		length, signature, err := r.readChunkMeta(buf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return n, io.ErrUnexpectedEOF
@@ -484,7 +500,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 		}
 
 		if length == 0 { // completion chunk
-			return n, r.close(p)
+			return n, r.close(buf)
 		}
 		if length > chunkMaxLength {
 			return 0, ErrEntityTooLarge
