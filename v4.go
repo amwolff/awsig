@@ -437,8 +437,17 @@ func (r *v4Reader) close(buf []byte) error {
 			}
 			return err
 		}
-	} else if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
-		return ErrInvalidRequest
+	} else {
+		// The final chunk's empty data is terminated by CRLF like any other chunk's.
+		if err := r.consumeCRLF(buf); err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.ErrUnexpectedEOF
+			}
+			return err
+		}
+		if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
+			return ErrInvalidRequest
+		}
 	}
 
 	if err := r.ir.verify(r.integrity); err != nil {
