@@ -185,3 +185,27 @@ func trimSpaceLeft(s string) string {
 	// we're done. Non-ASCII cases have already been handled above.
 	return s[start:]
 }
+
+// canonicalV4HeaderValue trims surrounding whitespace and replaces each run of
+// spaces and tabs with a single space, as S3 and botocore do.
+func canonicalV4HeaderValue(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(value, "  ") && !strings.Contains(value, "\t") {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	inRun := false
+	for i := range len(value) {
+		if c := value[i]; c == ' ' || c == '\t' {
+			if !inRun {
+				b.WriteByte(' ')
+			}
+			inRun = true
+			continue
+		}
+		inRun = false
+		b.WriteByte(value[i])
+	}
+	return b.String()
+}
