@@ -399,3 +399,18 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		assert.Equal(t, file, b)
 	})
 }
+
+func TestV2DateUTC(t *testing.T) {
+	// rclone's SigV2 signer formats the Date header with time.RFC1123, which ends in UTC.
+	now := dummyNow(2026, time.November, 11, 4, 12, 48)
+	date := now().Format(time.RFC1123)
+	assert.Equal(t, "Wed, 11 Nov 2026 04:12:48 UTC", date)
+
+	v2 := NewV2[exampleAuthData](simpleCredentialsProvider{accessKeyID: "key", secretAccessKey: "secret"})
+	v2.now = now
+	r := httptest.NewRequest(http.MethodGet, "http://localhost/bucket/key", nil)
+	r.Header.Set("Date", date)
+	r.Header.Set("Authorization", "AWS key:"+calculateSignatureV2("GET\n\n\n"+date+"\n/bucket/key", "secret").String())
+	_, err := v2.Verify(r, "")
+	assert.NoError(t, err)
+}

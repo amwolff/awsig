@@ -157,6 +157,33 @@ func TestTimeSkewExceeded(t *testing.T) {
 	})
 }
 
+func TestHTTPTimeFormats(t *testing.T) {
+	want := time.Date(2026, time.November, 11, 4, 12, 48, 0, time.UTC)
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{
+		{"Wed, 11 Nov 2026 04:12:48 GMT", true},
+		{"Wed, 11 Nov 2026 04:12:48 UTC", true},
+		{"Wed, 11 Nov 2026 04:12:48 +0000", true},
+		{"Tue, 10 Nov 2026 23:12:48 -0500", true},
+		// S3 refuses these as well.
+		{"Wed, 11 Nov 2026 04:12:48 UT", false},
+		{"Wed, 11 Nov 2026 04:12:48 Z", false},
+		{"Wed, 11 Nov 2026 04:12:48", false},
+		// S3 accepts other zone names with their offsets, which isn't supported.
+		{"Tue, 10 Nov 2026 23:12:48 EST", false},
+	} {
+		got, err := parseTimeWithFormats(tc.value, httpTimeFormats)
+		if !tc.ok {
+			assert.Error(t, err)
+			continue
+		}
+		assert.NoError(t, err)
+		assert.That(t, got.Equal(want))
+	}
+}
+
 func TestURIEncode(t *testing.T) {
 	const (
 		testPath   = "photos/Jan/sample.jpg"
