@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,6 +267,20 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 
 		_, _, err := parseMultipartFormUntilFile(body, boundary)
 		assert.Error(t, err)
+	})
+	t.Run("file field name in any case", func(t *testing.T) {
+		// S3 accepted "File" and "FILE" too.
+		for _, name := range []string{"file", "File", "FILE"} {
+			const boundary = "boundary"
+			body := "--" + boundary + "\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nk\r\n" +
+				"--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"; filename=\"f\"\r\n\r\ndata\r\n--" + boundary + "--\r\n"
+			file, form, err := parseMultipartFormUntilFile(strings.NewReader(body), boundary)
+			assert.NoError(t, err)
+			assert.Equal(t, "f", form.FileName())
+			data, err := io.ReadAll(file)
+			assert.NoError(t, err)
+			assert.Equal(t, "data", string(data))
+		}
 	})
 	t.Run("form within the size limit", func(t *testing.T) {
 		expectedFile, expectedForm, body, boundary := newMultipart(100, "image.jpg", 30000)
