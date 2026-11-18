@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,14 +300,29 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 
 		_, _, err := parseMultipartFormUntilFile(body, boundary)
 		assert.Error(t, err)
-		assert.That(t, errors.Is(err, errMessageTooLarge))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
 	})
 	t.Run("form above limit with bogus boundary", func(t *testing.T) {
 		_, _, body, _ := newMultipart(1000, "image.jpg", 1000)
 
 		_, _, err := parseMultipartFormUntilFile(body, "bogus")
 		assert.Error(t, err)
-		assert.That(t, errors.Is(err, errMessageTooLarge))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
+	})
+	t.Run("limit inside the file part's headers", func(t *testing.T) {
+		const boundary = "boundary"
+		field := "--" + boundary + "\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n"
+		file := "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\n\r\n"
+		// fit is how much of the file part's delimiter and headers fits within the limit.
+		for fit := range len(file) + 1 {
+			body := field + strings.Repeat("x", maxPostPreDataLength-len(field)-fit) + file + "data\r\n--" + boundary + "--\r\n"
+			_, _, err := parseMultipartFormUntilFile(strings.NewReader(body), boundary)
+			if fit == len(file) {
+				assert.NoError(t, err)
+			} else {
+				assert.That(t, errors.Is(err, ErrMessageTooLarge))
+			}
+		}
 	})
 }
 
