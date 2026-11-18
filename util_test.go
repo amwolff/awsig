@@ -315,7 +315,7 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 		file := "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\n\r\n"
 		// fit is how much of the file part's delimiter and headers fits within the limit.
 		for fit := range len(file) + 1 {
-			body := field + strings.Repeat("x", 20000-len(field)-fit) + file + "data\r\n--" + boundary + "--\r\n"
+			body := field + strings.Repeat("x", maxPostPreDataLength-len(field)-fit) + file + "data\r\n--" + boundary + "--\r\n"
 			_, _, err := parseMultipartFormUntilFile(strings.NewReader(body), boundary)
 			if fit == len(file) {
 				assert.NoError(t, err)

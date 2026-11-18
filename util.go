@@ -345,6 +345,11 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 
 var errLimitReached = errors.New("limitedReader: limit reached")
 
+// maxPostPreDataLength is the size of a POST form before the file's content that S3 accepts. AWS
+// documents it as 20KB, and S3 reports it as MaxPostPreDataLengthBytes, 20480:
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sigv4-HTTPPOSTForms.html
+const maxPostPreDataLength = 20 << 10
+
 func limitReader(r io.Reader, n int64) *limitedReader {
 	return &limitedReader{
 		r:       r,
@@ -390,7 +395,7 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		return nil, nil, http.ErrMissingBoundary
 	}
 
-	lr := limitReader(r, 20000) // the 20KB limit is mentioned in https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTForms.html
+	lr := limitReader(r, maxPostPreDataLength)
 	mr := multipart.NewReader(lr, boundary)
 
 	form := make(PostForm)
