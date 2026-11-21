@@ -1127,7 +1127,7 @@ func (v4 *V4[T]) parsePresignedXAmzContentSHA256(rawXAmzContentSHA256 string) pa
 	return parsedXAmzContentSHA256{sumRequest: sumRequest}
 }
 
-func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
+func (v4 *V4[T]) canonicalRequestHash(r *http.Request, headers http.Header, query url.Values, signedHeaders []string, hashedPayload string) []byte {
 	b := newHashBuilder(sha256.New)
 
 	// http verb
@@ -1162,7 +1162,7 @@ func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedH
 			b.WriteByte(lf)
 			continue
 		}
-		for _, v := range r.Header.Values(name) {
+		for _, v := range headers.Values(name) {
 			b.WriteString(name)
 			b.WriteByte(':')
 			b.WriteString(strings.TrimSpace(v))
@@ -1258,8 +1258,22 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 	}, nil
 }
 
+// requestHeaders returns the headers of r as the client sent them. Go's HTTP server moves
+// Transfer-Encoding from the headers to r.TransferEncoding, but clients sign it, such as the AWS
+// CLI v1 sending an aws-chunked body with a trailer.
+func requestHeaders(r *http.Request) http.Header {
+	if len(r.TransferEncoding) == 0 || r.Header.Get(headerTransferEncoding) != "" {
+		return r.Header
+	}
+	headers := r.Header.Clone()
+	headers.Set(headerTransferEncoding, strings.Join(r.TransferEncoding, ","))
+	return headers
+}
+
 func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
-	rawDate, parsedDateTime, err := v4.parseTime(r.Header)
+	headers := requestHeaders(r)
+
+	rawDate, parsedDateTime, err := v4.parseTime(headers)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
@@ -1271,12 +1285,12 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 		return v4VerifiedData[T]{}, ErrRequestTimeTooSkewed
 	}
 
-	authorization, err := v4.parseAuthorization(r.Header.Get(headerAuthorization), parsedDateTime, r.Header)
+	authorization, err := v4.parseAuthorization(headers.Get(headerAuthorization), parsedDateTime, headers)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
 
-	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
+	rawXAmzContentSHA256 := headers.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
 		return v4VerifiedData[T]{}, nestError(
 			ErrMissingSecurityHeader,
@@ -1284,7 +1298,7 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 		)
 	}
 
-	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.Header)
+	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, headers)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
@@ -1294,7 +1308,7 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 		return v4VerifiedData[T]{}, err
 	}
 
-	canonicalRequestHash := v4.canonicalRequestHash(r, r.URL.Query(), authorization.signedHeaders, rawXAmzContentSHA256)
+	canonicalRequestHash := v4.canonicalRequestHash(r, headers, r.URL.Query(), authorization.signedHeaders, rawXAmzContentSHA256)
 
 	signature := calculateSignatureV4(signatureV4Data{
 		algorithm:       authorization.signingAlgo,
@@ -1320,6 +1334,8 @@ func (v4 *V4[T]) verify(r *http.Request) (v4VerifiedData[T], error) {
 }
 
 func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedData[T], error) {
+	headers := requestHeaders(r)
+
 	expires, err := strconv.ParseInt(query.Get(queryXAmzExpires), 10, 64)
 	if err != nil {
 		return v4VerifiedData[T]{}, ErrInvalidPresignedExpiration
@@ -1344,7 +1360,7 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, ErrRequestExpired
 	}
 
-	authorization, err := v4.parseAuthorizationFromQuery(query, parsedDateTime, r.Header)
+	authorization, err := v4.parseAuthorizationFromQuery(query, parsedDateTime, headers)
 	if err != nil {
 		return v4VerifiedData[T]{}, err
 	}
@@ -1354,14 +1370,14 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, err
 	}
 
-	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
+	rawXAmzContentSHA256 := headers.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
 		rawXAmzContentSHA256 = unsignedPayload
 	}
 	options := v4.parsePresignedXAmzContentSHA256(rawXAmzContentSHA256)
 
 	query.Del(queryXAmzSignature)
-	canonicalRequestHash := v4.canonicalRequestHash(r, query, authorization.signedHeaders, rawXAmzContentSHA256)
+	canonicalRequestHash := v4.canonicalRequestHash(r, headers, query, authorization.signedHeaders, rawXAmzContentSHA256)
 
 	signature := calculateSignatureV4(signatureV4Data{
 		algorithm:       authorization.signingAlgo,

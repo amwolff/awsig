@@ -1,8 +1,11 @@
 package awsig
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -932,4 +935,48 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 	})
+}
+
+// TestV4SignedTransferEncoding checks a request that signs Transfer-Encoding, like the AWS CLI v1
+// sending an aws-chunked body with a trailer, as Go's HTTP server parses it: with the header moved
+// to r.TransferEncoding.
+func TestV4SignedTransferEncoding(t *testing.T) {
+	const (
+		accessKeyID     = "AKIAIOSFODNN7EXAMPLE"
+		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+		dateTime        = "20130524T000000Z"
+		scope           = "20130524/us-east-1/s3/aws4_request"
+		signedHeaders   = "host;transfer-encoding;x-amz-content-sha256;x-amz-date"
+	)
+	canonicalRequest := "PUT\n/bucket/key\n\n" +
+		"host:example.com\ntransfer-encoding:chunked\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:" + dateTime + "\n\n" +
+		signedHeaders + "\nUNSIGNED-PAYLOAD"
+	digest := sha256.Sum256([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" + dateTime + "\n" + scope + "\n" + hex.EncodeToString(digest[:])
+	key := []byte("AWS4" + secretAccessKey)
+	for _, part := range []string{"20130524", "us-east-1", "s3", "aws4_request", stringToSign} {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(part))
+		key = mac.Sum(nil)
+	}
+
+	raw := "PUT /bucket/key HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n" +
+		"X-Amz-Content-Sha256: UNSIGNED-PAYLOAD\r\nX-Amz-Date: " + dateTime + "\r\n" +
+		"Authorization: AWS4-HMAC-SHA256 Credential=" + accessKeyID + "/" + scope + ",SignedHeaders=" + signedHeaders + ",Signature=" + hex.EncodeToString(key) + "\r\n" +
+		"\r\n5\r\nhello\r\n0\r\n\r\n"
+	r, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw)))
+	assert.NoError(t, err)
+	assert.Equal(t, "", r.Header.Get("Transfer-Encoding"))
+
+	v := NewV4(simpleCredentialsProvider{accessKeyID: accessKeyID, secretAccessKey: secretAccessKey}, V4Config{Region: "us-east-1", Service: "s3"})
+	v.now = dummyNow(2013, time.May, 24, 0, 0, 0)
+	vr, err := v.Verify(r)
+	assert.NoError(t, err)
+	rd, err := vr.Reader()
+	assert.NoError(t, err)
+	body, err := io.ReadAll(rd)
+	assert.NoError(t, err)
+	assert.Equal(t, "hello", string(body))
+	// The request's own headers are left alone.
+	assert.Equal(t, "", r.Header.Get("Transfer-Encoding"))
 }
