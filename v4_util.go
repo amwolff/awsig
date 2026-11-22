@@ -186,26 +186,26 @@ func trimSpaceLeft(s string) string {
 	return s[start:]
 }
 
-// canonicalV4HeaderValue trims surrounding whitespace and replaces each run of
-// spaces and tabs with a single space, as S3 and botocore do.
+// canonicalV4HeaderValue trims spaces and tabs and collapses each run of them
+// into a single space. Like S3, it leaves other whitespace, such as a
+// non-breaking space, untouched.
 func canonicalV4HeaderValue(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.Trim(value, " \t")
 	if !strings.Contains(value, "  ") && !strings.Contains(value, "\t") {
 		return value
 	}
 	var b strings.Builder
 	b.Grow(len(value))
-	inRun := false
+	var p byte
 	for i := range len(value) {
-		if c := value[i]; c == ' ' || c == '\t' {
-			if !inRun {
-				b.WriteByte(' ')
-			}
-			inRun = true
-			continue
+		c := value[i]
+		if c == '\t' {
+			c = ' '
 		}
-		inRun = false
-		b.WriteByte(value[i])
+		if c != ' ' || p != ' ' {
+			b.WriteByte(c)
+		}
+		p = c
 	}
 	return b.String()
 }
