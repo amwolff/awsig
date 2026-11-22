@@ -446,7 +446,7 @@ func (r *v4Reader) close(buf []byte) error {
 			return err
 		}
 		if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
-			return ErrInvalidRequest
+			return nestError(io.ErrUnexpectedEOF, "unexpected data after the final chunk")
 		}
 	}
 

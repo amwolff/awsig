@@ -256,7 +256,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 65*1024), b)
 		})
 		t.Run("final chunk endings", func(t *testing.T) {
-			// S3 answers IncompleteBody to all of these. Trailing data stays ErrInvalidRequest.
+			// S3 answers IncompleteBody to all of these, including data after the CRLF.
 			for _, tt := range []struct {
 				ending string
 				want   error
@@ -264,7 +264,8 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 				{"", io.ErrUnexpectedEOF},
 				{"\r", io.ErrUnexpectedEOF},
 				{"\n", io.ErrUnexpectedEOF},
-				{"\r\nxyz", ErrInvalidRequest},
+				{"\r\nxyz", io.ErrUnexpectedEOF},
+				{"\r\n\r\n", io.ErrUnexpectedEOF},
 			} {
 				vr, err := v4.Verify(newRequest(tt.ending), "")
 				assert.NoError(t, err)
