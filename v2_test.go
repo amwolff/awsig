@@ -81,6 +81,22 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		assert.That(t, n == 0)
 		assert.That(t, errors.Is(err, io.EOF))
 	})
+	t.Run("Date ending in UTC", func(t *testing.T) {
+		// rclone's SigV2 signer formats the Date header with time.RFC1123, which ends in UTC.
+		now := dummyNow(2026, time.November, 11, 4, 12, 48)
+		date := now().Format(time.RFC1123)
+		assert.Equal(t, "Wed, 11 Nov 2026 04:12:48 UTC", date)
+
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/photos/puppy.jpg", nil)
+		req.Header.Add("Date", date)
+		req.Header.Add("Authorization", "AWS "+accessKeyID+":"+calculateSignatureV2("GET\n\n\n"+date+"\n/awsexamplebucket1/photos/puppy.jpg", provider.secretAccessKey).String())
+
+		v2 := newV2(provider, now)
+
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
+	})
 	t.Run("Object PUT", func(t *testing.T) {
 		body := make([]byte, 94328)
 
@@ -398,19 +414,4 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		assert.NoError(t, err)
 		assert.Equal(t, file, b)
 	})
-}
-
-func TestV2DateUTC(t *testing.T) {
-	// rclone's SigV2 signer formats the Date header with time.RFC1123, which ends in UTC.
-	now := dummyNow(2026, time.November, 11, 4, 12, 48)
-	date := now().Format(time.RFC1123)
-	assert.Equal(t, "Wed, 11 Nov 2026 04:12:48 UTC", date)
-
-	v2 := NewV2[exampleAuthData](simpleCredentialsProvider{accessKeyID: "key", secretAccessKey: "secret"})
-	v2.now = now
-	r := httptest.NewRequest(http.MethodGet, "http://localhost/bucket/key", nil)
-	r.Header.Set("Date", date)
-	r.Header.Set("Authorization", "AWS key:"+calculateSignatureV2("GET\n\n\n"+date+"\n/bucket/key", "secret").String())
-	_, err := v2.Verify(r, "")
-	assert.NoError(t, err)
 }
