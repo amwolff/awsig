@@ -157,7 +157,7 @@ func TestTimeSkewExceeded(t *testing.T) {
 	})
 }
 
-func TestHTTPTimeFormats(t *testing.T) {
+func TestParseTimeWithFormats(t *testing.T) {
 	want := time.Date(2026, time.November, 11, 4, 12, 48, 0, time.UTC)
 	for _, tc := range []struct {
 		value string
