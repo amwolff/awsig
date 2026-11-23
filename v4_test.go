@@ -427,7 +427,22 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			{
 				name:        "invalid value",
 				trailer:     "x-amz-checksum-crc32:!!!\r\n\r\n",
-				expectedErr: ErrInvalidDigest,
+				expectedErr: ErrInvalidTrailingChecksum,
+			},
+			{
+				name:        "empty value",
+				trailer:     "x-amz-checksum-crc32:\r\n\r\n",
+				expectedErr: ErrInvalidTrailingChecksum,
+			},
+			{
+				name:        "value of another decoded size",
+				trailer:     "x-amz-checksum-crc32:AAAAAAA=\r\n\r\n",
+				expectedErr: ErrInvalidTrailingChecksum,
+			},
+			{
+				name:        "value with non-zero padding bits",
+				trailer:     "x-amz-checksum-crc32:s3SFCR==\r\n\r\n",
+				expectedErr: ErrInvalidTrailingChecksum,
 			},
 			{
 				name:        "no trailer",
@@ -497,6 +512,9 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 					assert.NoError(t, err)
 				} else {
 					assert.That(t, errors.Is(err, tt.expectedErr))
+				}
+				if tt.expectedErr == ErrInvalidTrailingChecksum {
+					assert.That(t, errors.Is(err, ErrInvalidRequest))
 				}
 			})
 		}
@@ -591,7 +609,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			{
 				name:        "invalid value",
 				trailer:     "x-amz-checksum-crc32c:!!!\r\n" + signatureTrailer("x-amz-checksum-crc32c:!!!\n") + "\r\n",
-				expectedErr: ErrInvalidDigest,
+				expectedErr: ErrInvalidTrailingChecksum,
 			},
 			{
 				name:        "no trailer",
@@ -703,7 +721,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			{
 				name:        "bad signature with invalid value",
 				trailer:     "x-amz-checksum-crc32c:!!!\r\n" + badSignature + "\r\n",
-				expectedErr: ErrInvalidDigest,
+				expectedErr: ErrInvalidTrailingChecksum,
 			},
 			{
 				name:        "bad signature with multiple headers",

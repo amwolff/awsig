@@ -48,6 +48,10 @@ var (
 	ErrInvalidRequest = errors.New("invalid request")
 	// ErrInvalidSignature indicates the InvalidSignature error code.
 	ErrInvalidSignature = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	// ErrInvalidTrailingChecksum indicates that the value of a trailing checksum header isn't a
+	// base64-encoded checksum of the declared algorithm. It's nested in ErrInvalidRequest, like
+	// S3's InvalidRequest error for it.
+	ErrInvalidTrailingChecksum = errors.New("the value of the trailing checksum header is not valid")
 	// ErrInvalidXAmzContentSHA256 indicates that the X-Amz-Content-Sha256 header has an invalid value.
 	ErrInvalidXAmzContentSHA256 = errors.New("the x-amz-content-sha256 header does not contain a valid value")
 	// ErrInvalidXAmzDecodedContentLength indicates that the X-Amz-Decoded-Content-Length header has an invalid value.

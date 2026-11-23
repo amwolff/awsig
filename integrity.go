@@ -40,21 +40,25 @@ const (
 	algorithmHashedPayload
 )
 
-func (a ChecksumAlgorithm) base64Length() int {
+func (a ChecksumAlgorithm) size() int {
 	switch a {
 	case AlgorithmCRC32, AlgorithmCRC32C:
-		return base64.StdEncoding.EncodedLen(crc32.Size)
+		return crc32.Size
 	case AlgorithmCRC64NVME:
-		return base64.StdEncoding.EncodedLen(crc64.Size)
+		return crc64.Size
 	case AlgorithmMD5:
-		return base64.StdEncoding.EncodedLen(md5.Size)
+		return md5.Size
 	case AlgorithmSHA1:
-		return base64.StdEncoding.EncodedLen(sha1.Size)
+		return sha1.Size
 	case AlgorithmSHA256, algorithmHashedPayload:
-		return base64.StdEncoding.EncodedLen(sha256.Size)
+		return sha256.Size
 	default:
 		return 0
 	}
+}
+
+func (a ChecksumAlgorithm) base64Length() int {
+	return base64.StdEncoding.EncodedLen(a.size())
 }
 
 func (a ChecksumAlgorithm) valid() bool {
@@ -322,8 +326,12 @@ func decodeChecksum(a ChecksumAlgorithm, v []byte) ([]byte, error) {
 		n, err := hex.Decode(dst, v)
 		return dst[:n], err
 	default:
+		// Like S3, a value with non-zero padding bits or of another decoded size is refused.
 		dst := make([]byte, base64.StdEncoding.DecodedLen(len(v)))
-		n, err := base64.StdEncoding.Decode(dst, v)
+		n, err := base64.StdEncoding.Strict().Decode(dst, v)
+		if err == nil && n != a.size() {
+			err = fmt.Errorf("invalid decoded length for %s: expected %d, got %d", a, a.size(), n)
+		}
 		return dst[:n], err
 	}
 }
