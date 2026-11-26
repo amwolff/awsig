@@ -217,7 +217,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		})
 	})
 	t.Run("multiple chunks", func(t *testing.T) {
-		t.Run("PUT Object", func(t *testing.T) {
+		newRequest := func(ending string) *http.Request {
 			body := bytes.NewBuffer(nil)
 			body.WriteString("10000;chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648\r\n")
 			for range 65536 {
@@ -230,6 +230,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			}
 			body.WriteString("\r\n")
 			body.WriteString("0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n")
+			body.WriteString(ending)
 
 			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
@@ -239,8 +240,11 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			req.Header.Add("Content-Encoding", "aws-chunked")
 			req.Header.Add("x-amz-decoded-content-length", "66560")
 			req.Header.Add("Content-Length", "66824")
-
-			vr, err := v4.Verify(req, "")
+			return req
+		}
+		t.Run("PUT Object", func(t *testing.T) {
+			// The final chunk's empty data is CRLF-terminated, which Content-Length counts.
+			vr, err := v4.Verify(newRequest("\r\n"), "")
 			assert.NoError(t, err)
 			assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 
@@ -250,6 +254,28 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 65*1024), b)
+		})
+		t.Run("final chunk endings", func(t *testing.T) {
+			// S3 answers IncompleteBody to all of these, including data after the CRLF.
+			for _, tt := range []struct {
+				ending string
+				want   error
+			}{
+				{"", io.ErrUnexpectedEOF},
+				{"\r", io.ErrUnexpectedEOF},
+				{"\n", io.ErrUnexpectedEOF},
+				{"\r\nxyz", io.ErrUnexpectedEOF},
+				{"\r\n\r\n", io.ErrUnexpectedEOF},
+			} {
+				vr, err := v4.Verify(newRequest(tt.ending), "")
+				assert.NoError(t, err)
+
+				r, err := vr.Reader()
+				assert.NoError(t, err)
+
+				_, err = io.ReadAll(r)
+				assert.That(t, errors.Is(err, tt.want))
+			}
 		})
 	})
 	t.Run("trailing headers", func(t *testing.T) {
@@ -950,4 +976,58 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 	})
+}
+
+func TestCanonicalQuery(t *testing.T) {
+	v := new(V4[struct{}])
+	for _, tc := range []struct{ query, want string }{
+		{"", ""},
+		{"a=1&a=2", "a=1&a=2"},
+		{"a=2&a=1", "a=1&a=2"},
+		{"a=0&b=2&b=1", "a=0&b=1&b=2"},
+		{"z=1&%C3%A9=2", "%C3%A9=2&z=1"},
+		{"a=z&a=%C3%A9", "a=%C3%A9&a=z"},
+		{"a-=1&a=2", "a=2&a-=1"},
+		{"acl&prefix=a+b", "acl=&prefix=a%20b"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "https://example.com/?"+tc.query, nil)
+			query := r.URL.Query()
+			got := v.canonicalRequestHash(r, query, []string{"host"}, unsignedPayload)
+			want := sha256Hash([]byte("GET\n/\n" + tc.want + "\nhost:example.com\n\nhost\nUNSIGNED-PAYLOAD"))
+			assert.Equal(t, want, got)
+			// Sorting the values must not reorder the caller's query.
+			assert.DeepEqual(t, r.URL.Query(), query)
+		})
+	}
+}
+
+func TestCanonicalHeaders(t *testing.T) {
+	v := new(V4[struct{}])
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{"repeated", []string{"first", "second"}, "first,second"},
+		{"whitespace", []string{"  a  b  c  "}, "a b c"},
+		{"tab", []string{"a\tb"}, "a b"},
+		{"spaces and tabs", []string{"a \t\t b"}, "a b"},
+		{"non-breaking space", []string{"a\u00a0b"}, "a\u00a0b"},
+		{"surrounding whitespace", []string{"\t\u00a0foo\u00a0\t"}, "\u00a0foo\u00a0"},
+		{"combined", []string{" a  b ", " c "}, "a b,c"},
+		{"empty value", []string{"", "c"}, ",c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "https://example.com/", nil)
+			for _, v := range tc.values {
+				r.Header.Add("X-Amz-Meta-Test", v)
+			}
+			original := r.Header.Clone()
+			got := v.canonicalRequestHash(r, nil, []string{"host", "x-amz-meta-test"}, unsignedPayload)
+			want := sha256Hash([]byte("GET\n/\n\nhost:example.com\nx-amz-meta-test:" + tc.want + "\n\nhost;x-amz-meta-test\nUNSIGNED-PAYLOAD"))
+			assert.Equal(t, want, got)
+			assert.DeepEqual(t, original, r.Header)
+		})
+	}
 }
