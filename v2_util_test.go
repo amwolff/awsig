@@ -1,6 +1,8 @@
 package awsig
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -143,4 +145,33 @@ func mustQueryUnescape(s string) string {
 		panic(err)
 	}
 	return u
+}
+
+func TestV2SignedSubresources(t *testing.T) {
+	const (
+		date            = "Tue, 27 Mar 2007 19:36:42 +0000"
+		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	)
+	for _, tc := range []struct{ query, resource string }{
+		{"retention", "?retention"},
+		{"legal-hold", "?legal-hold"},
+		{"tagging", "?tagging"},
+		{"attributes", "?attributes"},
+		{"object-lock", "?object-lock"},
+		{"annotation", "?annotation"},
+		{"metadataJournalTable", "?metadataJournalTable"},
+		{"select&select-type=2", "?select&select-type=2"},
+		{"versionId=a&versionId=b", "?versionId=a&versionId=b"},
+		{"acl&versionId=a&versionId=b", "?acl&versionId=a&versionId=b"},
+		{"response-content-type=a/b", "?response-content-type=a/b"},
+		{"list-type=2&prefix=a&x-id=GetObject", ""},
+		{"storageClass&defaultObjectAcl&renameObject", ""},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "https://example.com/bucket/key?"+tc.query, nil)
+			actual := new(V2[struct{}]).calculateSignature(r, date, "", secretAccessKey)
+			expected := calculateSignatureV2("GET\n\n\n"+date+"\n/bucket/key"+tc.resource, secretAccessKey)
+			assert.True(t, expected.compare(actual))
+		})
+	}
 }

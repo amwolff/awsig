@@ -225,6 +225,57 @@ func (v2 *V2[T]) parseAuthorization(rawAuthorization string) (v2ParsedAuthorizat
 	}, nil
 }
 
+var v2SignedSubresources = map[string]bool{
+	"abac":                         true,
+	"accelerate":                   true,
+	"acl":                          true,
+	"analytics":                    true,
+	"annotation":                   true,
+	"attributes":                   true,
+	"cors":                         true,
+	"delete":                       true,
+	"encryption":                   true,
+	"intelligent-tiering":          true,
+	"inventory":                    true,
+	"legal-hold":                   true,
+	"lifecycle":                    true,
+	"location":                     true,
+	"logging":                      true,
+	"metadataAnnotationTable":      true,
+	"metadataConfiguration":        true,
+	"metadataInventoryTable":       true,
+	"metadataJournalTable":         true,
+	"metadataTable":                true,
+	"metrics":                      true,
+	"notification":                 true,
+	"object-lock":                  true,
+	"ownershipControls":            true,
+	"partNumber":                   true,
+	"policy":                       true,
+	"policyStatus":                 true,
+	"publicAccessBlock":            true,
+	"replication":                  true,
+	"requestPayment":               true,
+	"restore":                      true,
+	"retention":                    true,
+	"select":                       true,
+	"select-type":                  true,
+	"tagging":                      true,
+	"torrent":                      true,
+	"uploadId":                     true,
+	"uploads":                      true,
+	"versionId":                    true,
+	"versioning":                   true,
+	"versions":                     true,
+	"website":                      true,
+	"response-content-type":        false,
+	"response-content-language":    false,
+	"response-expires":             false,
+	"response-cache-control":       false,
+	"response-content-disposition": false,
+	"response-content-encoding":    false,
+}
+
 func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedBucket, key string) signatureV2 {
 	b := newHashBuilder(func() hash.Hash { return hmac.New(sha1.New, []byte(key)) })
 
@@ -274,29 +325,7 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 	}
 
 	if query := r.URL.Query(); len(query) > 0 {
-		included := map[string]bool{
-			"acl":                          true,
-			"lifecycle":                    true,
-			"location":                     true,
-			"logging":                      true,
-			"notification":                 true,
-			"partNumber":                   true,
-			"policy":                       true,
-			"requestPayment":               true,
-			"uploadId":                     true,
-			"uploads":                      true,
-			"versionId":                    true,
-			"versioning":                   true,
-			"versions":                     true,
-			"website":                      true,
-			"response-content-type":        false,
-			"response-content-language":    false,
-			"response-expires":             false,
-			"response-cache-control":       false,
-			"response-content-disposition": false,
-			"response-content-encoding":    false,
-			"delete":                       true,
-		}
+		included := v2SignedSubresources
 
 		maps.DeleteFunc(query, func(p string, _ []string) bool {
 			_, ok := included[p]
@@ -305,15 +334,15 @@ func (v2 *V2[T]) calculateSignature(r *http.Request, dateElement, virtualHostedB
 		queryParams := slices.Collect(maps.Keys(query))
 		slices.Sort(queryParams)
 
-		for i, p := range queryParams {
-			if i == 0 {
-				b.WriteByte('?')
-			}
-
+		first := true
+		for _, p := range queryParams {
 			for _, v := range query[p] {
-				if i > 0 {
+				if first {
+					b.WriteByte('?')
+				} else {
 					b.WriteByte('&')
 				}
+				first = false
 				b.WriteString(p)
 				if v != "" {
 					b.WriteByte('=')
