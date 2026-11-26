@@ -437,8 +437,17 @@ func (r *v4Reader) close(buf []byte) error {
 			}
 			return err
 		}
-	} else if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
-		return ErrInvalidRequest
+	} else {
+		// The final chunk's empty data is terminated by CRLF like any other chunk's.
+		if err := r.consumeCRLF(buf); err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.ErrUnexpectedEOF
+			}
+			return err
+		}
+		if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
+			return nestError(io.ErrUnexpectedEOF, "unexpected data after the final chunk")
+		}
 	}
 
 	if err := r.ir.verify(r.integrity); err != nil {
@@ -1137,16 +1146,26 @@ func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedH
 	b.WriteString(uriEncode(r.URL.Path, true))
 	b.WriteByte(lf)
 	// canonical query string
-	queryParams := slices.Collect(maps.Keys(query))
+	encodedQuery := make(url.Values, len(query))
+	for key, values := range query {
+		encodedKey := uriEncode(key, false)
+		for _, value := range values {
+			encodedQuery[encodedKey] = append(encodedQuery[encodedKey], uriEncode(value, false))
+		}
+		slices.Sort(encodedQuery[encodedKey])
+	}
+	queryParams := slices.Collect(maps.Keys(encodedQuery))
 	slices.Sort(queryParams)
-	for i, p := range queryParams {
-		for _, v := range query[p] {
-			if i > 0 {
+	first := true
+	for _, p := range queryParams {
+		for _, v := range encodedQuery[p] {
+			if !first {
 				b.WriteByte('&')
 			}
-			b.WriteString(uriEncode(p, false))
+			first = false
+			b.WriteString(p)
 			b.WriteByte('=')
-			b.WriteString(uriEncode(v, false))
+			b.WriteString(v)
 		}
 	}
 	b.WriteByte(lf)
@@ -1162,12 +1181,15 @@ func (v4 *V4[T]) canonicalRequestHash(r *http.Request, query url.Values, signedH
 			b.WriteByte(lf)
 			continue
 		}
-		for _, v := range r.Header.Values(name) {
-			b.WriteString(name)
-			b.WriteByte(':')
-			b.WriteString(strings.TrimSpace(v))
-			b.WriteByte(lf)
+		b.WriteString(name)
+		b.WriteByte(':')
+		for i, v := range r.Header.Values(name) {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(canonicalV4HeaderValue(v))
 		}
+		b.WriteByte(lf)
 	}
 	b.WriteByte(lf)
 	// signed headers

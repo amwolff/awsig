@@ -185,3 +185,27 @@ func trimSpaceLeft(s string) string {
 	// we're done. Non-ASCII cases have already been handled above.
 	return s[start:]
 }
+
+// canonicalV4HeaderValue trims spaces and tabs and collapses each run of them
+// into a single space. Like S3, it leaves other whitespace, such as a
+// non-breaking space, untouched.
+func canonicalV4HeaderValue(value string) string {
+	value = strings.Trim(value, " \t")
+	if !strings.Contains(value, "  ") && !strings.Contains(value, "\t") {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	var p byte
+	for i := range len(value) {
+		c := value[i]
+		if c == '\t' {
+			c = ' '
+		}
+		if c != ' ' || p != ' ' {
+			b.WriteByte(c)
+		}
+		p = c
+	}
+	return b.String()
+}
