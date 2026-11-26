@@ -978,7 +978,7 @@ func TestCanonicalQuery(t *testing.T) {
 		t.Run(tc.query, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "https://example.com/?"+tc.query, nil)
 			query := r.URL.Query()
-			got := v.canonicalRequestHash(r, query, []string{"host"}, unsignedPayload)
+			got := v.canonicalRequestHash(r, query, r.Header, []string{"host"}, unsignedPayload)
 			want := sha256Hash([]byte("GET\n/\n" + tc.want + "\nhost:example.com\n\nhost\nUNSIGNED-PAYLOAD"))
 			assert.Equal(t, want, got)
 			// Sorting the values must not reorder the caller's query.
@@ -1009,7 +1009,7 @@ func TestCanonicalHeaders(t *testing.T) {
 				r.Header.Add("X-Amz-Meta-Test", v)
 			}
 			original := r.Header.Clone()
-			got := v.canonicalRequestHash(r, nil, []string{"host", "x-amz-meta-test"}, unsignedPayload)
+			got := v.canonicalRequestHash(r, nil, r.Header, []string{"host", "x-amz-meta-test"}, unsignedPayload)
 			want := sha256Hash([]byte("GET\n/\n\nhost:example.com\nx-amz-meta-test:" + tc.want + "\n\nhost;x-amz-meta-test\nUNSIGNED-PAYLOAD"))
 			assert.Equal(t, want, got)
 			assert.DeepEqual(t, original, r.Header)
