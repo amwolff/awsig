@@ -1035,6 +1035,8 @@ func TestV4SignedTransferEncoding(t *testing.T) {
 	assert.Equal(t, "hello", string(body))
 	// The request's own headers are left alone.
 	assert.Equal(t, "", r.Header.Get("Transfer-Encoding"))
+}
+
 func TestCanonicalQuery(t *testing.T) {
 	v := new(V4[struct{}])
 	for _, tc := range []struct{ query, want string }{
