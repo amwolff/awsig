@@ -103,6 +103,8 @@ const (
 
 var httpTimeFormats = []string{
 	http.TimeFormat,
+	// time.RFC1123 would accept any zone abbreviation and read the ones it doesn't know as UTC.
+	"Mon, 02 Jan 2006 15:04:05 UTC",
 	"Mon, 02 Jan 2006 15:04:05 -0700",
 	time.RFC850,
 	time.ANSIC,
