@@ -403,7 +403,8 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 
 		name := part.FormName()
 
-		if name == "file" {
+		// Like S3, the field name is case-insensitive.
+		if strings.EqualFold(name, "file") {
 			lr.toggle() // stop limiting the reader as we reached the file part
 			form.Set(name, PostFormElement{
 				Headers: part.Header,
