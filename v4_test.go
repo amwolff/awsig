@@ -963,6 +963,30 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 	})
 }
 
+func TestCanonicalQuery(t *testing.T) {
+	v := new(V4[struct{}])
+	for _, tc := range []struct{ query, want string }{
+		{"", ""},
+		{"a=1&a=2", "a=1&a=2"},
+		{"a=2&a=1", "a=1&a=2"},
+		{"a=0&b=2&b=1", "a=0&b=1&b=2"},
+		{"z=1&%C3%A9=2", "%C3%A9=2&z=1"},
+		{"a=z&a=%C3%A9", "a=%C3%A9&a=z"},
+		{"a-=1&a=2", "a=2&a-=1"},
+		{"acl&prefix=a+b", "acl=&prefix=a%20b"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "https://example.com/?"+tc.query, nil)
+			query := r.URL.Query()
+			got := v.canonicalRequestHash(r, query, []string{"host"}, unsignedPayload)
+			want := sha256Hash([]byte("GET\n/\n" + tc.want + "\nhost:example.com\n\nhost\nUNSIGNED-PAYLOAD"))
+			assert.Equal(t, want, got)
+			// Sorting the values must not reorder the caller's query.
+			assert.DeepEqual(t, r.URL.Query(), query)
+		})
+	}
+}
+
 func TestCanonicalHeaders(t *testing.T) {
 	v := new(V4[struct{}])
 	for _, tc := range []struct {
@@ -1035,28 +1059,4 @@ func TestV4SignedTransferEncoding(t *testing.T) {
 	assert.Equal(t, "hello", string(body))
 	// The request's own headers are left alone.
 	assert.Equal(t, "", r.Header.Get("Transfer-Encoding"))
-}
-
-func TestCanonicalQuery(t *testing.T) {
-	v := new(V4[struct{}])
-	for _, tc := range []struct{ query, want string }{
-		{"", ""},
-		{"a=1&a=2", "a=1&a=2"},
-		{"a=2&a=1", "a=1&a=2"},
-		{"a=0&b=2&b=1", "a=0&b=1&b=2"},
-		{"z=1&%C3%A9=2", "%C3%A9=2&z=1"},
-		{"a=z&a=%C3%A9", "a=%C3%A9&a=z"},
-		{"a-=1&a=2", "a=2&a-=1"},
-		{"acl&prefix=a+b", "acl=&prefix=a%20b"},
-	} {
-		t.Run(tc.query, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "https://example.com/?"+tc.query, nil)
-			query := r.URL.Query()
-			got := v.canonicalRequestHash(r, query, []string{"host"}, unsignedPayload)
-			want := sha256Hash([]byte("GET\n/\n" + tc.want + "\nhost:example.com\n\nhost\nUNSIGNED-PAYLOAD"))
-			assert.Equal(t, want, got)
-			// Sorting the values must not reorder the caller's query.
-			assert.DeepEqual(t, r.URL.Query(), query)
-		})
-	}
 }
