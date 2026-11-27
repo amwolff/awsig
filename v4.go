@@ -358,7 +358,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 		return nestError(ErrMalformedTrailer, "expected trailing header %q", expectedName)
 	}
 	if err = r.integrity.setEncoded(r.trailingSumAlgo, value); err != nil {
-		return nestError(ErrInvalidRequest, "%w: %w", ErrInvalidTrailingChecksum, err)
+		return nestError(ErrInvalidRequest, "%w", nestError(ErrInvalidTrailingChecksum, "%w", err))
 	}
 
 	if r.unsigned {
