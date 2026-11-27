@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -413,5 +414,30 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		b, err := io.ReadAll(r)
 		assert.NoError(t, err)
 		assert.Equal(t, file, b)
+	})
+	t.Run("presigned (POST) form too large", func(t *testing.T) {
+		body := bytes.NewBuffer(nil)
+
+		mw := multipart.NewWriter(body)
+
+		assert.NoError(t, mw.WriteField("key", "user/eric/MyPicture.jpg"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-tag", strings.Repeat("x", maxPostPreDataLength)))
+		assert.NoError(t, mw.WriteField("AWSAccessKeyId", "AKIAIOSFODNN7EXAMPLE"))
+		assert.NoError(t, mw.WriteField("Policy", "eyAiZXhwaXJhdGlvbiI6ICIyMDA3LTEyLTAxVDEyOjAwOjAwLjAwMFoiLAogICJjb25kaXRpb25zIjogWwogICAgeyJidWNrZXQiOiAiam9obnNtaXRoIn0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiRrZXkiLCAidXNlci9lcmljLyJdLAogICAgeyJhY2wiOiAicHVibGljLXJlYWQifSwKICAgIHsic3VjY2Vzc19hY3Rpb25fcmVkaXJlY3QiOiAiaHR0cDovL2pvaG5zbWl0aC5zMy5hbWF6b25hd3MuY29tL3N1Y2Nlc3NmdWxfdXBsb2FkLmh0bWwifSwKICAgIFsic3RhcnRzLXdpdGgiLCAiJENvbnRlbnQtVHlwZSIsICJpbWFnZS8iXSwKICAgIHsieC1hbXotbWV0YS11dWlkIjogIjE0MzY1MTIzNjUxMjc0In0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiR4LWFtei1tZXRhLXRhZyIsICIiXQogIF0KfQo="))
+		assert.NoError(t, mw.WriteField("Signature", "0RavWzkygo6QX9caELEqKi9kDbU="))
+
+		_, err := mw.CreateFormFile("file", "MyFilename.jpg")
+		assert.NoError(t, err)
+
+		assert.NoError(t, mw.Close())
+
+		req := httptest.NewRequest(http.MethodPost, "http://johnsmith.s3.amazonaws.com/", body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+
+		v2 := newV2(provider3, time.Now)
+
+		_, err = v2.Verify(req, "johnsmith")
+		assert.That(t, errors.Is(err, ErrMalformedPOSTRequest))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
 	})
 }

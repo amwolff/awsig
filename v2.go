@@ -443,7 +443,7 @@ func (v2 *V2[T]) Verify(r *http.Request, virtualHostedBucket string) (*V2Verifie
 	if r.Method == http.MethodPost && typ == "multipart/form-data" {
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, ErrMalformedPOSTRequest
+			return nil, nestError(ErrMalformedPOSTRequest, "parse multipart form: %w", err)
 		}
 		data, err := v2.verifyPost(r.Context(), form)
 		if err != nil {

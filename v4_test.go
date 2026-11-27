@@ -866,6 +866,33 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		_, err = v4.Verify(req, "")
 		assert.That(t, errors.Is(err, ErrRequestNotYetValid))
 	})
+	t.Run("presigned (POST) form too large", func(t *testing.T) {
+		body := bytes.NewBuffer(nil)
+
+		mw := multipart.NewWriter(body)
+
+		assert.NoError(t, mw.WriteField("key", "user/user1/${filename}"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-tag", strings.Repeat("x", maxPostPreDataLength)))
+		assert.NoError(t, mw.WriteField("X-Amz-Credential", "AKIAIOSFODNN7EXAMPLE/20151229/us-east-1/s3/aws4_request"))
+		assert.NoError(t, mw.WriteField("X-Amz-Algorithm", "AWS4-HMAC-SHA256"))
+		assert.NoError(t, mw.WriteField("X-Amz-Date", "20151229T000000Z"))
+		assert.NoError(t, mw.WriteField("Policy", "eyAiZXhwaXJhdGlvbiI6ICIyMDE1LTEyLTMwVDEyOjAwOjAwLjAwMFoiLA0KICAiY29uZGl0aW9ucyI6IFsNCiAgICB7ImJ1Y2tldCI6ICJzaWd2NGV4YW1wbGVidWNrZXQifSwNCiAgICBbInN0YXJ0cy13aXRoIiwgIiRrZXkiLCAidXNlci91c2VyMS8iXSwNCiAgICB7ImFjbCI6ICJwdWJsaWMtcmVhZCJ9LA0KICAgIHsic3VjY2Vzc19hY3Rpb25fcmVkaXJlY3QiOiAiaHR0cDovL3NpZ3Y0ZXhhbXBsZWJ1Y2tldC5zMy5hbWF6b25hd3MuY29tL3N1Y2Nlc3NmdWxfdXBsb2FkLmh0bWwifSwNCiAgICBbInN0YXJ0cy13aXRoIiwgIiRDb250ZW50LVR5cGUiLCAiaW1hZ2UvIl0sDQogICAgeyJ4LWFtei1tZXRhLXV1aWQiOiAiMTQzNjUxMjM2NTEyNzQifSwNCiAgICB7IngtYW16LXNlcnZlci1zaWRlLWVuY3J5cHRpb24iOiAiQUVTMjU2In0sDQogICAgWyJzdGFydHMtd2l0aCIsICIkeC1hbXotbWV0YS10YWciLCAiIl0sDQoNCiAgICB7IngtYW16LWNyZWRlbnRpYWwiOiAiQUtJQUlPU0ZPRE5ON0VYQU1QTEUvMjAxNTEyMjkvdXMtZWFzdC0xL3MzL2F3czRfcmVxdWVzdCJ9LA0KICAgIHsieC1hbXotYWxnb3JpdGhtIjogIkFXUzQtSE1BQy1TSEEyNTYifSwNCiAgICB7IngtYW16LWRhdGUiOiAiMjAxNTEyMjlUMDAwMDAwWiIgfQ0KICBdDQp9"))
+		assert.NoError(t, mw.WriteField("X-Amz-Signature", "8afdbf4008c03f22c2cd3cdb72e4afbb1f6a588f3255ac628749a66d7f09699e"))
+
+		_, err := mw.CreateFormFile("file", "hello.txt")
+		assert.NoError(t, err)
+
+		assert.NoError(t, mw.Close())
+
+		req := httptest.NewRequest(http.MethodPost, "http://sigv4examplebucket.s3.amazonaws.com/", body)
+		req.Header.Add("Content-Type", mw.FormDataContentType())
+
+		v4 := newV4(provider, dummyNow(2015, time.December, 29, 0, 0, 0))
+
+		_, err = v4.Verify(req, "")
+		assert.That(t, errors.Is(err, ErrMalformedPOSTRequest))
+		assert.That(t, errors.Is(err, ErrMessageTooLarge))
+	})
 
 	t.Run("signed header with empty value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/", nil)

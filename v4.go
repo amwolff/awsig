@@ -1419,7 +1419,7 @@ func (v4 *V4[T]) Verify(r *http.Request) (*V4VerifiedRequest[T], error) {
 	if r.Method == http.MethodPost && typ == "multipart/form-data" {
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
-			return nil, ErrMalformedPOSTRequest
+			return nil, nestError(ErrMalformedPOSTRequest, "parse multipart form: %w", err)
 		}
 		data, err := v4.verifyPost(r.Context(), form)
 		if err != nil {
