@@ -277,25 +277,6 @@ func (e *nestedError) Is(target error) bool {
 	return errors.Is(e.inner, target)
 }
 
-// legacyError is an error that also matches the error callers checked for before it was added, so
-// that callers that don't know it keep their answer.
-type legacyError struct {
-	err    error
-	legacy error
-}
-
-func (e *legacyError) Error() string {
-	return e.err.Error()
-}
-
-func (e *legacyError) Unwrap() []error {
-	return []error{e.err, e.legacy}
-}
-
-func withLegacy(err, legacy error) error {
-	return &legacyError{err: err, legacy: legacy}
-}
-
 func nestError(outer error, format string, a ...any) *nestedError {
 	return &nestedError{
 		outer: outer,

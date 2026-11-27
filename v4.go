@@ -499,7 +499,7 @@ func (r *v4Reader) Read(p []byte) (n int, err error) {
 			return 0, ErrEntityTooLarge
 		}
 		if length < chunkMinLength && r.decodedContentLength > length {
-			return 0, withLegacy(ErrInvalidChunkSize, ErrEntityTooSmall)
+			return 0, ErrInvalidChunkSize
 		}
 	}
 
@@ -907,18 +907,18 @@ func (v4 *V4[T]) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.
 		}
 		if strings.EqualFold(key, headerContentMD5) {
 			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
-				return nil, withLegacy(nestError(
+				return nil, nestError(
 					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", headerContentMD5,
-				), ErrMissingSecurityHeader)
+				)
 			}
 		}
 		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
 			if _, ok := signedHeadersLookup[k]; !ok {
-				return nil, withLegacy(nestError(
+				return nil, nestError(
 					ErrUnsignedHeader,
 					"the SignedHeaders parameter does not contain the %s header", k,
-				), ErrMissingSecurityHeader)
+				)
 			}
 		}
 	}
@@ -1010,7 +1010,7 @@ func (v4 *V4[T]) parseAuthorizationFromQuery(query url.Values, expectedDate time
 
 	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true, ErrAuthorizationQueryParametersError)
 	if err != nil {
-		return v4ParsedAuthorization{}, withLegacy(err, ErrAuthorizationHeaderMalformed)
+		return v4ParsedAuthorization{}, err
 	}
 
 	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true)
