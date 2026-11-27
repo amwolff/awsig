@@ -337,6 +337,8 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 		assert.That(t, errors.Is(err, ErrMessageTooLarge))
 	})
 	t.Run("limit inside the file part's headers", func(t *testing.T) {
+		// Unlike the tests above, mime/multipart drops errLimitReached here and reports a malformed
+		// MIME header instead.
 		const boundary = "boundary"
 		field := "--" + boundary + "\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n"
 		file := "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\n\r\n"

@@ -364,8 +364,8 @@ type limitedReader struct {
 	r       io.Reader
 	n       int64
 	enabled bool
-	// reached is set once a Read was refused because of the limit. Readers such as mime/multipart
-	// don't always pass errLimitReached on.
+	// reached is set once a Read was refused because of the limit. When the limit cuts a part's
+	// headers short, mime/multipart reports a malformed MIME header instead of errLimitReached.
 	reached bool
 }
 
