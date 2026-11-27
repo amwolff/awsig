@@ -958,6 +958,62 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		assert.Equal(t, accessKeyID, vr.AuthData().accessKeyID)
 	})
+
+	t.Run("chunk smaller than 8 KiB", func(t *testing.T) {
+		body := fmt.Sprintf("1fff\r\n%s\r\n2401\r\n%s\r\n0\r\nx-amz-checksum-crc32:s3SFCQ==\r\n\r\n", strings.Repeat("a", 8191), strings.Repeat("a", 9217))
+		req := httptest.NewRequest(http.MethodPut, "https://amzn-s3-demo-bucket.s3.amazonaws.com/Key+", strings.NewReader(body))
+		req.Header.Add("Content-Encoding", "aws-chunked")
+		req.Header.Add("x-amz-decoded-content-length", "17408")
+		req.Header.Add("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+		req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32")
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer,Signature=8fdf2b7a7005b82789d2a9cec832705457298e8a6a908f8c85f17e44c707aa64")
+		req.Header.Add("Content-Length", strconv.Itoa(len(body)))
+		req.Header.Add("x-amz-date", "20130524T000000Z")
+
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
+		assert.NoError(t, err)
+
+		r, err := vr.Reader(cr)
+		assert.NoError(t, err)
+
+		_, err = io.ReadAll(r)
+		assert.That(t, errors.Is(err, ErrInvalidChunkSize))
+	})
+
+	t.Run("unsigned headers", func(t *testing.T) {
+		for _, header := range []string{"x-amz-meta-foo", "Content-MD5"} {
+			t.Run(header, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
+				req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+				req.Header.Add("Range", "bytes=0-9")
+				req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+				req.Header.Add("x-amz-date", "20130524T000000Z")
+				_, err := v4.Verify(req, "")
+				assert.NoError(t, err)
+
+				req.Header.Add(header, "1B2M2Y8AsgTpgAmY7PhCfg==") // added after signing
+				_, err = v4.Verify(req, "")
+				assert.That(t, errors.Is(err, ErrUnsignedHeader))
+			})
+		}
+	})
+
+	t.Run("presigned with malformed credential", func(t *testing.T) {
+		for _, tc := range []struct{ name, credential string }{
+			{"garbage", "garbage"},
+			{"wrong date", "AKIAIOSFODNN7EXAMPLE%2F20130523%2Fus-east-1%2Fs3%2Faws4_request"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential="+tc.credential+
+					"&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature="+testBogusSignatureV4, nil)
+				_, err := v4.Verify(req, "")
+				assert.That(t, errors.Is(err, ErrAuthorizationQueryParametersError))
+			})
+		}
+	})
 }
 
 func TestCanonicalQuery(t *testing.T) {
