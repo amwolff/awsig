@@ -283,8 +283,8 @@ func parseChunkTrailerHeader(line []byte) (name, value []byte, err error) {
 //   - S3 verifies the signature before it validates the trailing headers' names and values. We
 //     validate the trailing header first, so that we don't compute a signature for a trailer that
 //     we're going to reject anyway. As a result, a bad signature accompanied by an undeclared
-//     header or an invalid value is reported as ErrMalformedTrailer or ErrInvalidDigest instead of
-//     ErrSignatureDoesNotMatch.
+//     header or an invalid value is reported as ErrMalformedTrailer or ErrInvalidTrailingChecksum
+//     instead of ErrSignatureDoesNotMatch.
 //   - S3 trims any amount of whitespace (including a LF, CR, or tab, and excluding the protocol-
 //     significant sequence CRLF) from around a trailing header's key and value. We, however, accept
 //     at most chunkTrailingWhitespaceMaxLength bytes of whitespace per line to strictly limit the
@@ -358,7 +358,7 @@ func (r *v4Reader) readChunkTrailer(buf []byte) error {
 		return nestError(ErrMalformedTrailer, "expected trailing header %q", expectedName)
 	}
 	if err = r.integrity.setEncoded(r.trailingSumAlgo, value); err != nil {
-		return ErrInvalidDigest
+		return nestError(ErrInvalidRequest, "%w", nestError(ErrInvalidTrailingChecksum, "%w", err))
 	}
 
 	if r.unsigned {
