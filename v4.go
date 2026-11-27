@@ -1230,7 +1230,9 @@ func (v4 *V4[T]) verifyPost(ctx context.Context, form PostForm) (v4VerifiedData[
 		return v4VerifiedData[T]{}, ErrInvalidPOSTDate
 	}
 
-	if v4.now().Before(parsedDateTime) {
+	// S3 doesn't check that a POST policy's date has passed. Allowing the clock skew of other requests
+	// keeps a form signed by a client whose clock is a little ahead usable.
+	if v4.now().Add(maxRequestTimeSkew).Before(parsedDateTime) {
 		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	}
 
@@ -1360,7 +1362,8 @@ func (v4 *V4[T]) verifyPresigned(r *http.Request, query url.Values) (v4VerifiedD
 		return v4VerifiedData[T]{}, ErrInvalidPresignedDate
 	}
 
-	if now := v4.now(); now.Before(parsedDateTime) {
+	// Like S3, a URL dated up to the allowed clock skew ahead is valid.
+	if now := v4.now(); now.Add(maxRequestTimeSkew).Before(parsedDateTime) {
 		return v4VerifiedData[T]{}, ErrRequestNotYetValid
 	} else if now.After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
 		return v4VerifiedData[T]{}, ErrRequestExpired
